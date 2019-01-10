@@ -1336,9 +1336,9 @@ show_progress(void *arg)
 	  {
 		while ((progress = ((double)global_data.done_lines / (double)global_data.total_lines)) == prog_sv);
 		prog_sv = progress;
-		if ((ceil(progress * 100)-progress) < (progress - floor(progress * 100)))
+		if ((ceil(progress * 100)-(progress*100)) < ((progress*100) - floor(progress * 100)))
 			int_prog = (unsigned)ceil(progress * 100);
-		else if ((ceil(progress * 100)-progress) > (progress - floor(progress * 100)))
+		else if ((ceil(progress * 100)-(progress*100)) > ((progress*100) - floor(progress * 100)))
 			int_prog = (unsigned)floor(progress * 100);
 		else
 			int_prog = (unsigned)ceil(progress * 100);
