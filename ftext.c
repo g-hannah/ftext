@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 #include <assert.h>
+=======
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -16,6 +19,7 @@
 #include <time.h>
 #include <unistd.h>
 
+<<<<<<< HEAD
 /*
  * Need a large line buffer because there are cases where
  * there are actually no new line characters at all until
@@ -24,15 +28,25 @@
  */
 #define LINE_BUF_SIZE				32368
 
+=======
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 #define PROGRESS_COLOUR			"\e[48;5;2m\e[38;5;16m"
 #define DISPLAY_COLOUR			"\e[48;5;255m\e[38;5;208m"
 #define FILE_STATS_COLOUR		"\e[48;5;240m\e[38;5;208m"
 
+<<<<<<< HEAD
 #define CREATION_FLAGS	(O_RDWR|O_CREAT|O_TRUNC|O_FSYNC)
 #define CREATION_MASK		(S_IRWXU & ~S_IXUSR)
 #define OLD_FILE_FLAGS	O_RDWR
 #define OLD_FILE_MAP		MAP_SHARED
 #define OLD_FILE_PROT		(PROT_READ|PROT_WRITE)
+=======
+#define CREATION_FLAGS			(O_RDWR|O_CREAT|O_TRUNC|O_FSYNC)
+#define CREATION_MASK			(S_IRWXU & ~S_IXUSR)
+#define OLD_FILE_FLAGS			O_RDWR
+#define OLD_FILE_MAP			MAP_SHARED
+#define OLD_FILE_PROT			(PROT_READ|PROT_WRITE)
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 #define debug(__string, __int, __string2)						\
 {											\
@@ -123,8 +137,11 @@
 	unlink(filename);								\
 	rename(output, filename);							\
 }
+<<<<<<< HEAD
 
 #define clear_struct(s) memset((s), 0, sizeof(*(s)))
+=======
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		
 // file manipulation functions
 ssize_t	check_file(char *) __THROW __nonnull ((1)) __wur;
@@ -167,6 +184,7 @@ struct GLOBAL_DATA
 
 typedef struct GLOBAL_DATA		GLOBAL_DATA;
 
+<<<<<<< HEAD
 static GLOBAL_DATA		global_data;
 static int		MAX_LENGTH = 0;
 //static int				TOTAL_LINES;
@@ -194,6 +212,35 @@ static int		DEBUG = 0;
 static pthread_attr_t			tATTR;
 static pthread_t			TID_SP;
 //static sigjmp_buf			__jb_sp;
+=======
+static GLOBAL_DATA			global_data;
+static int				MAX_LENGTH = 0;
+static int				TOTAL_LINES;
+static int				NEW_TOTAL;
+static struct winsize			WINSIZE;
+static int				POSITION;
+
+static FILE				*debug_fp = NULL;
+static int				debug_fd;
+static char				*debug_log = "debug.log";
+
+// tmp files
+static char				*output = "output.tmp";
+// global flags
+static int				JUSTIFY = 0;
+static int				UNJUSTIFY = 0;
+static int				LENGTH = 0;
+static int				LALIGN = 0;
+static int				RALIGN = 0;
+static int				CALIGN = 0;
+static int				DEBUG = 0;
+
+		/* Thread-related variables */
+static pthread_mutex_t			MUTEX;
+static pthread_attr_t			tATTR;
+static pthread_t			TID_SP;
+static sigjmp_buf			__jb_sp;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 static char				*__sp_str_format =    "[ Changing line length ]";
 static char				*__sp_str_justify =   "[   Justifying lines   ]";
 static char				*__sp_str_unjustify = "[  Unjustifying lines  ]";
@@ -218,12 +265,21 @@ main(int argc, char *argv[])
 
 	opterr = 0;
 	while ((c = getopt(argc, argv, "L:lrcjuDh")) != -1)
+<<<<<<< HEAD
 	{
 		switch(c)
 		{
 			case(0x44):
 			DEBUG = 1;
 			debug_fd = open(debug_log, O_RDWR|O_CREAT|O_TRUNC|O_FSYNC, S_IRUSR|S_IWUSR);
+=======
+	  {
+		switch(c)
+		  {
+			case(0x44):
+			DEBUG = 1;
+			debug_fd = open(debug_log, O_RDWR|O_CREAT|O_TRUNC|O_FSYNC, (S_IRWXU & ~S_IXUSR));
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 			debug_fp = fdopen(debug_fd, "r+");
 			debug("main: opened log for debugging", 0, NULL);
 			break;
@@ -254,8 +310,13 @@ main(int argc, char *argv[])
 			break;
 			default:
 			p_error("invalid option specified", 0xff);
+<<<<<<< HEAD
 		}
 	}
+=======
+		  }
+	  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	if (UNJUSTIFY && JUSTIFY)
 		p_error("cannot have both -j and -u", 0xff);
@@ -283,53 +344,98 @@ main(int argc, char *argv[])
 	down(POSITION-2);
 
 	if (LENGTH)
+<<<<<<< HEAD
 	{
+=======
+	  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_format);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (change_line_length(argv[optind]) == -1)
 			goto __err;
+<<<<<<< HEAD
 	}
 
 	if (JUSTIFY)
 	{
+=======
+	  }
+
+	if (JUSTIFY)
+	  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_justify);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (justify_text(argv[optind]) == -1)
 			goto __err;
+<<<<<<< HEAD
 	}
 	
 	if (UNJUSTIFY)
 	{
+=======
+	  }
+	
+	if (UNJUSTIFY)
+	  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_unjustify);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (unjustify_text(argv[optind]) == -1)
 			goto __err;
+<<<<<<< HEAD
 	}
 
 	if (LALIGN)
 	{
+=======
+	  }
+
+	if (LALIGN)
+	  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_lalign);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (left_align_text(argv[optind]) == -1)
 			goto __err;
+<<<<<<< HEAD
 	}
 
 	if (RALIGN)
 	{
+=======
+	  }
+
+	if (RALIGN)
+	  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_ralign);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (right_align_text(argv[optind]) == -1)
 			goto __err;
+<<<<<<< HEAD
 	}
 
 	if (CALIGN)
 	{
+=======
+	  }
+
+	if (CALIGN)
+	  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_calign);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (centre_align_text(argv[optind]) == -1)
 			goto __err;
+<<<<<<< HEAD
 	}
 
+=======
+	  }
+
+	__end:
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	exit(0);
 
 	__err:
@@ -339,7 +445,11 @@ main(int argc, char *argv[])
 ssize_t
 check_file(char *filename)
 {
+<<<<<<< HEAD
 	struct stat		STATB;
+=======
+	static struct stat		STATB;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	lstat(filename, &STATB);
 	if (!S_ISREG(STATB.st_mode))
@@ -353,6 +463,7 @@ ssize_t
 change_line_length(char *filename)
 {
 	// pointers for manipulating lines in the file
+<<<<<<< HEAD
 	char		*start = NULL;
 	char		*end = NULL;
 	char		*p = NULL;
@@ -399,10 +510,51 @@ change_line_length(char *filename)
 		write(fd_new, line_buf, (size_t)i);
 		i = 0;
 	}
+=======
+	static char		*start = NULL;
+	static char		*end = NULL;
+	static char		*p = NULL;
+	static char		*p1 = NULL;
+	static char		line_buf[256];
+	static char		c;
+
+	static int		fd_old, fd_new, char_cnt, max, i;
+	static int		spaces;
+	static void		*map = NULL;
+	static struct stat	statb;
+
+	reset_global();
+	open_map();
+	// unjustify the text first (and automatically left-align)
+	p = (char *)map; i &= ~i;
+	while ((void *)p < (map + statb.st_size))
+	  {
+		while (*p == 0x20 || *p == 0x09)
+			++p;
+
+		start = p;
+		while (*p != 0x0a && (void *)p < (map + statb.st_size))
+		  {
+			if (*p == 0x20)
+			  {
+				line_buf[i++] = *p++;
+				while (*p == 0x20 && (void *)p < (map + (statb.st_size-1)))
+					++p;
+			  }
+			line_buf[i++] = *p++;
+		  }
+		while (*p == 0x0a)
+			line_buf[i++] = *p++;
+		line_buf[i] = 0;
+		write(fd_new, line_buf, (size_t)i);
+		i &= ~i;
+	  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	close_unmap();
 	reset_global();
 	open_map();
+<<<<<<< HEAD
 
 	p = (char *)map;
 	map_end = ((char *)map + statb.st_size);
@@ -459,10 +611,46 @@ change_line_length(char *filename)
 				while (p < end)
 					line_buf[i++] = *p++;
 
+=======
+	p = (char *)map;
+
+	start = p;
+	while (p < (char *)(map + statb.st_size))
+	  {
+		__main_loop_length_start:
+
+		if (p == (char *)(map + statb.st_size))
+			break;
+
+		if (*p == 0x0a)
+			while (*p == 0x0a)
+				{ write(fd_new, p++, 1); ++global_data.done_lines; }
+
+		while ((*p == 0x20 || *p == 0x09) && p < (char *)(map + statb.st_size))
+			++p;
+
+		start = p; char_cnt &= ~char_cnt;
+		while (char_cnt < MAX_LENGTH && p < (char *)(map + statb.st_size))
+			{ ++char_cnt; ++p; }
+
+		/* deal with new line characters; conserve paragraph structure */
+		end = p; p = start; spaces &= ~spaces;
+		while (p < end)
+		  {
+			if (*p == 0x0a && (*(p+1) == 0x0a || *(p-1) == 0x0a))
+			  {
+				end = p;
+				while (*end == 0x0a && end < (char *)(map + statb.st_size))
+					{ ++end; ++global_data.done_lines; }
+				p = start; i &= ~i;
+				while (p < end)
+					line_buf[i++] = *p++;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 				line_buf[i] = 0;
 				write(fd_new, line_buf, strlen(line_buf));
 				start = p;
 				goto __main_loop_length_start;
+<<<<<<< HEAD
 			}
 			else
 			if (*p == 0x0a && (*(p+1) != 0x0a && *(p-1) != 0x0a))
@@ -481,19 +669,42 @@ change_line_length(char *filename)
 		{
 			p = start;
 			i = 0;
+=======
+			  }
+			if (*p == 0x0a && (*(p+1) != 0x0a && *(p-1) != 0x0a))
+			  {
+				*p= 0x20;
+				++global_data.done_lines;
+			  }
+			if (*p == 0x20)
+				++spaces;
+			++p;
+		  }
+		if (spaces == 0)
+		  {
+			p = start;
+			i &= ~i;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 			while (p < end)
 				line_buf[i++] = *p++;
 			if (*p == 0x0a)
 				line_buf[i++] = *p++;
 			else
+<<<<<<< HEAD
 			{
 				line_buf[i++] = 0x0a;
 			}
+=======
+			  {
+				line_buf[i++] = 0x0a;
+			  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 			line_buf[i] = 0;
 			write(fd_new, line_buf, strlen(line_buf));
 			++global_data.done_lines;
 			start = p;
 			goto __main_loop_length_start;
+<<<<<<< HEAD
 		}
 
 		/* If we're here, we found a range of MAX_LENGTH characters not including an entre-paragraph */
@@ -526,11 +737,37 @@ change_line_length(char *filename)
 				 * so find the nearest space character going backwards
 				 */
 				while (*p != 0x20 && p > ((char *)map + 1))
+=======
+		  }
+
+		/* If we're here, we found a range of MAX_LENGTH characters not including an entre-paragraph */
+		if (*p == 0x0a)
+		  {
+			while (*end == 0x0a && end < (char *)(map + statb.st_size))
+				{ ++end; ++global_data.done_lines; }
+
+			write(fd_new, start, (end - start));
+			p = end; start = p;
+		  }
+		else
+		  {
+			if (*p == 0x20)
+			  {
+				write(fd_new, start, (end - start));
+				c = 0x0a;
+				write(fd_new, &c, 1);
+				++end; p = end; start = p;
+			  }
+			else
+			  {
+				while (*p != 0x20)
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 					--p;
 				end = p;
 				write(fd_new, start, (end - start));
 				c = 0x0a;
 				write(fd_new, &c, 1);
+<<<<<<< HEAD
 				++end;
 				p = end;
 				start = p;
@@ -539,6 +776,14 @@ change_line_length(char *filename)
 	}
 
 	//__end:
+=======
+				++end; p = end; start = p;
+			  }
+		  }
+	  }
+
+	__end:
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	close_unmap();
 	pthread_join(TID_SP, NULL);
 	return(0);
@@ -557,6 +802,7 @@ justify_text(char *filename)
 	open_map();
 	p = (char *)map;
 
+<<<<<<< HEAD
 	char_cnt = 0;
 	if (!LENGTH) // find len of longest line and justify according to that
 	{
@@ -579,10 +825,35 @@ justify_text(char *filename)
 				}
 				++p; ++char_cnt;
 			}
+=======
+	char_cnt &= ~char_cnt;
+	if (!LENGTH) // find len of longest line and justify according to that
+	  {
+		MAX_LENGTH &= ~MAX_LENGTH; // au cas où
+		while (p < (char *)(map + statb.st_size))
+		  {
+			char_cnt &= ~char_cnt;
+			while (*p == 0x20 || *p == 0x09)
+				++p;
+			while (*p != 0x0a && p < (char *)(map + statb.st_size))
+			  {
+				if (*p == 0x20)
+				  {
+					if (*(p+1) == 0x20)
+					  {
+						fprintf(stderr,
+						"Text already justified\r\n");
+						goto __err;
+					  }
+				  }
+				++p; ++char_cnt;
+			  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 			while (*p == 0x0a && p < (char *)(map + statb.st_size))
 				++p;
 			if (char_cnt > MAX_LENGTH)
 				MAX_LENGTH = char_cnt;
+<<<<<<< HEAD
 		}
 		p = (char *)map;
 	}
@@ -590,6 +861,15 @@ justify_text(char *filename)
 	start = p;
 	while (p < (char *)(map + statb.st_size))
 	{
+=======
+		  }
+		p = (char *)map;
+	  }
+
+	start = p;
+	while (p < (char *)(map + statb.st_size))
+	  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		__main_loop_justify_start:
 
 		if (p == (char *)(map + statb.st_size))
@@ -597,36 +877,59 @@ justify_text(char *filename)
 
 		if (*p == 0x0a)
 			while (*p == 0x0a)
+<<<<<<< HEAD
 			{ write(fd_new, p++, 1); ++global_data.done_lines; }
+=======
+				{ write(fd_new, p++, 1); ++global_data.done_lines; }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 		while (*p == 0x20 || *p == 0x09)
 			++p;
 
 		start = p; char_cnt &= ~char_cnt;
 		while (*p != 0x0a && p < (char *)(map + statb.st_size))
+<<<<<<< HEAD
 		{ ++p; ++char_cnt; }
 
 		if (char_cnt > MAX_LENGTH)
 		{
+=======
+			{ ++p; ++char_cnt; }
+
+		if (char_cnt > MAX_LENGTH)
+		  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 			fprintf(stderr, "counted more characters than are in the longest line\r\n"
 					"count %d: longest line %d\r\n",
 				char_cnt, MAX_LENGTH);
 			goto __err;
+<<<<<<< HEAD
 		}
+=======
+		  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 
 	// now we have the line and we'll add more spaces if necessary
 
 		end = p;
 		while (*end == 0x0a && end < (char *)(map + statb.st_size))
+<<<<<<< HEAD
 		{ ++end; ++global_data.done_lines; }
 
 		if (MAX_LENGTH < char_cnt)
 		{
+=======
+			{ ++end; ++global_data.done_lines; }
+
+		if (MAX_LENGTH < char_cnt)
+		  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 			fprintf(stderr,
 				"justify length specified too short (%d - length of line %d)\r\n",
 				MAX_LENGTH, char_cnt);
 			goto __err;
+<<<<<<< HEAD
 		}
 		else if (MAX_LENGTH == char_cnt)
 		{
@@ -640,6 +943,21 @@ justify_text(char *filename)
 		}
 		else
 		{
+=======
+		  }
+		else if (MAX_LENGTH == char_cnt)
+		  {
+			write(fd_new, start, (end - start));
+			p = end; start = p;
+		  }
+		else if ((MAX_LENGTH - char_cnt) > 15)
+		  {
+			write(fd_new, start, (end - start));
+			p = end; start = p;
+		  }
+		else
+		  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 			static int			delta, spaces, remainder;
 			static char			*lim1 = NULL;
 			static char			*lim2 = NULL;
@@ -653,6 +971,7 @@ justify_text(char *filename)
 
 			p = start;
 			while (p < end)
+<<<<<<< HEAD
 			{
 				if (*p == 0x20)
 				{
@@ -669,12 +988,31 @@ justify_text(char *filename)
 				p = end; start = p;
 				goto __main_loop_justify_start;
 			}
+=======
+			  {
+				if (*p == 0x20)
+				  {
+					++spaces;
+					while (*p == 0x20)
+						++p;
+				  }
+				++p;
+			  }
+
+			if (spaces == 0)
+			  {
+				write(fd_new, start, (end - start));
+				p = end; start = p;
+				goto __main_loop_justify_start;
+			  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 			delta = (MAX_LENGTH - char_cnt);
 			remainder = (delta % spaces);
 
 			p = start; i &= ~i;
 			while (p < end)
+<<<<<<< HEAD
 			{
 				if (*p == 0x20)
 				{
@@ -684,39 +1022,71 @@ justify_text(char *filename)
 				}
 				j_line[i++] = *p++;
 			}
+=======
+			  {
+				if (*p == 0x20)
+				  {
+					j_line[i++] = *p++;
+					for (j = 0; j < (delta/spaces); ++j)
+						j_line[i++] = 0x20;
+				  }
+				j_line[i++] = *p++;
+			  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 			j_line[i] = 0;
 			
 			if (remainder != 0)
+<<<<<<< HEAD
 			{
+=======
+			  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 				l_end = j_line;
 				while (*l_end != 0)
 					++l_end;
 
 				if (*(l_end-2) == 0x20)
+<<<<<<< HEAD
 				{
 					l_end -= 2;
 					remainder += 2;
 					while (*l_end == 0x20 && l_end > j_line)
 					{ --l_end; ++remainder; }
+=======
+				  {
+					l_end -= 2;
+					remainder += 2;
+					while (*l_end == 0x20 && l_end > j_line)
+						{ --l_end; ++remainder; }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 					++l_end;
 					--remainder;
 					*l_end++ = 0x0a;
 					--remainder;
 					*l_end = 0;
+<<<<<<< HEAD
 				}
+=======
+				  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 				lim2 = l_end;
 				lim1 = j_line;
 
 				while (remainder != 0 && remainder > -1)
+<<<<<<< HEAD
 				{
+=======
+				  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 					l = lim1;
 					while (*l != 0x20)
 						++l;
 					l2 = l;
 					l = l_end;
 					while (l > l2)
+<<<<<<< HEAD
 					{
 						*l = *(l-1);
 						--l;
@@ -725,11 +1095,25 @@ justify_text(char *filename)
 						++l2;
 					if (l2 == l_end)
 					{
+=======
+					  {
+						*l = *(l-1);
+						--l;
+					  }
+					while (*l2 == 0x20 && l2 < l_end)
+						++l2;
+					if (l2 == l_end)
+					  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 						if (remainder > 0)
 							lim1 = l2 = j_line;
 						else
 							break;
+<<<<<<< HEAD
 					}
+=======
+					  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 					lim1 = l2;
 
 					++l_end;
@@ -745,6 +1129,7 @@ justify_text(char *filename)
 					l2 = l;
 					l = l_end;
 					while (l > l2)
+<<<<<<< HEAD
 					{
 						*l = *(l-1);
 						--l;
@@ -753,11 +1138,25 @@ justify_text(char *filename)
 						--l2;
 					if (l2 == j_line)
 					{
+=======
+					  {
+						*l = *(l-1);
+						--l;
+					  }
+					while (*l2 == 0x20 && l2 > j_line)
+						--l2;
+					if (l2 == j_line)
+					  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 						if (remainder > 0)
 							lim2 = l2 = l_end;
 						else
 							break;
+<<<<<<< HEAD
 					}
+=======
+					  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 					lim2 = l2;
 
 					++l_end;
@@ -766,6 +1165,7 @@ justify_text(char *filename)
 					--remainder;
 					if (remainder == 0 || remainder < 0)
 						break;
+<<<<<<< HEAD
 				}
 			}
 
@@ -775,6 +1175,17 @@ justify_text(char *filename)
 	}
 
 	//__end:
+=======
+				  }
+			  }
+
+			write(fd_new, j_line, strlen(j_line));
+			p = end; start = p;
+		  }
+	  }
+
+	__end:
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	close_unmap();
 	++global_data.done_lines;
 	pthread_join(TID_SP, NULL);
@@ -783,6 +1194,7 @@ justify_text(char *filename)
 	__err:
 	pthread_kill(TID_SP, SIGINT);
 	if (mlock(map, statb.st_size) < 0)
+<<<<<<< HEAD
 	{
 		fprintf(stderr,
 		"failed to unlock memory region (%p to %p): %s (line %d)\r\n",
@@ -790,17 +1202,33 @@ justify_text(char *filename)
 	}
 	if (munmap(map, statb.st_size) < 0)
 	{
+=======
+	  {
+		fprintf(stderr,
+		"failed to unlock memory region (%p to %p): %s (line %d)\r\n",
+		map, (map + (statb.st_size - 1)), strerror(errno), __LINE__);
+	  }
+	if (munmap(map, statb.st_size) < 0)
+	  {
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		fprintf(stderr,
 		"failed to unmap \"%s\": %s (line %d)\r\n",
 		filename, strerror(errno), __LINE__);
 		
+<<<<<<< HEAD
 	}
+=======
+	  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	debug("justify_text: __err: unmapped file from memory", 0, NULL);
 	close(fd_new);
 	unlink(output);
 	debug("justify_text: __err: unlinked output file", 0, filename);
 	close(fd_old);
+<<<<<<< HEAD
 	return -1;
+=======
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 }
 
 ssize_t
@@ -809,7 +1237,11 @@ unjustify_text(char *filename)
 	static int		fd_old, fd_new, i;
 	static void		*map = NULL;
 	static struct stat	statb;
+<<<<<<< HEAD
 	static char		*p = NULL;// *start = NULL, *end = NULL;
+=======
+	static char		*p = NULL, *start = NULL, *end = NULL;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	static char		line_buf[256];
 
 	global_data.total_lines &= ~global_data.total_lines;
@@ -835,7 +1267,11 @@ unjustify_text(char *filename)
 		i = 0;
 		while ((*p == 0x20 || *p == 0x09) && (void *)p < (map + statb.st_size))
 			++p;
+<<<<<<< HEAD
 		//start = p;
+=======
+		start = p;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 		while (*p != 0x0a && (void *)p < (map + statb.st_size))
 		  {
 			if (*p == 0x20)
@@ -875,8 +1311,13 @@ ssize_t
 left_align_text(char *filename)
 {
 	static char		*p = NULL, *start = NULL, *end = NULL;
+<<<<<<< HEAD
 	static char		line_buf[LINE_BUF_SIZE];//, c;
 	static int		fd_old, fd_new, i;//, j;
+=======
+	static char		line_buf[256], c;
+	static int		fd_old, fd_new, i, j;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	static void		*map = NULL;
 	static struct stat	statb;
 
@@ -952,6 +1393,10 @@ left_align_text(char *filename)
 		p = end; start = p;
 	  }
 
+<<<<<<< HEAD
+=======
+	__end:
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	close_unmap();
 	return(0);
 }
@@ -960,8 +1405,13 @@ ssize_t
 right_align_text(char *filename)
 {
 	static char		*p = NULL, *start = NULL, *end = NULL, *end2 = NULL, c;
+<<<<<<< HEAD
 	static char		line_buf[LINE_BUF_SIZE];
 	static int		i, fd_old, fd_new, delta, char_cnt;//,j;
+=======
+	static char		line_buf[256];
+	static int		i, j, fd_old, fd_new, delta, char_cnt;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	static void		*map = NULL;
 	static struct stat	statb;
 
@@ -1102,7 +1552,11 @@ ssize_t
 centre_align_text(char *filename)
 {
 	static char		*p = NULL, *start = NULL, *end = NULL, *end2 = NULL;
+<<<<<<< HEAD
 	static char		c;
+=======
+	static char		line_buf[256], c;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	static int		fd_old, fd_new, i, char_cnt, delta;
 	static void		*map = NULL;
 	static struct stat	statb;
@@ -1208,10 +1662,17 @@ centre_align_text(char *filename)
 int
 do_line_count(char *filename)
 {
+<<<<<<< HEAD
 	int			fd, count;
 	void		*map = NULL;
 	struct	stat	statb;
 	char		*p = NULL;
+=======
+	static int		fd, count;
+	static void		*map = NULL;
+	static struct stat	statb;
+	static char		*p = NULL;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	debug("do_line_count: opening file", 0, filename);
 	memset(&statb, 0, sizeof(statb));
@@ -1225,6 +1686,7 @@ do_line_count(char *filename)
 		p_error("do_line_count: error locking mapped memory", -1);
 	close(fd);
 
+<<<<<<< HEAD
 	count = 0;
 	p = (char *)map;
 
@@ -1239,6 +1701,19 @@ do_line_count(char *filename)
 	if (munlock(map, statb.st_size) < 0)
 		p_error("do_line_count: error unlocking mapped memory", -1);
 
+=======
+	count &= ~count;
+	p = (char *)map;
+
+	while (p < (char *)(map + statb.st_size))
+	  {
+		if (*p == 0x0a)
+			++count;
+		++p;
+	  }
+	if (munlock(map, statb.st_size) < 0)
+		p_error("do_line_count: error unlocking mapped memory", -1);
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	munmap(map, statb.st_size);
 	return(count);
 }
@@ -1247,6 +1722,7 @@ do_line_count(char *filename)
 void
 h_centre(int dir, int left, int right)
 {
+<<<<<<< HEAD
 	int		i;
 
 	if (dir == 0)
@@ -1260,11 +1736,26 @@ h_centre(int dir, int left, int right)
 		for (i = 0; i < ((WINSIZE.ws_col/2)-left+right); ++i)
 			printf("\e[D");
 	}
+=======
+	static int		i;
+
+	if (dir == 0)
+	  {
+		for (i = 0; i < ((WINSIZE.ws_col/2)-left+right); ++i)
+			printf("\e[C");
+	  }
+	else if (dir == 1)
+	  {
+		for (i = 0; i < ((WINSIZE.ws_col/2)-left+right); ++i)
+			printf("\e[D");
+	  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 }
 
 void
 v_centre(int dir, int up, int down)
 {
+<<<<<<< HEAD
 	int		i;
 
 	if (dir == 0)
@@ -1278,12 +1769,30 @@ v_centre(int dir, int up, int down)
 		for (i = 0; i < ((WINSIZE.ws_row/2)+up-down); ++i)
 			printf("\e[A");
 	}
+=======
+	static int		i;
+
+	if (dir == 0)
+	  {
+		for (i = 0; i < ((WINSIZE.ws_row/2)+up-down); ++i)
+			printf("\e[B");
+	  }
+	else if (dir == 1)
+	  {
+		for (i = 0; i < ((WINSIZE.ws_row/2)+up-down); ++i)
+			printf("\e[A");
+	  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 }
 
 void
 deleteline(void)
 {
+<<<<<<< HEAD
 	int		i;
+=======
+	static int		i;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	putchar(0x0d);
 	for (i = 0; i < WINSIZE.ws_col; ++i)
@@ -1294,11 +1803,16 @@ deleteline(void)
 void
 clear(void)
 {
+<<<<<<< HEAD
 	int		i;
+=======
+	static int		i;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	putchar(0x0d);
 	for (i = 0; i < WINSIZE.ws_row; ++i)
 		printf("\e[A");
+<<<<<<< HEAD
 
 	for (i = 0; i < WINSIZE.ws_row; ++i)
 	{
@@ -1306,13 +1820,25 @@ clear(void)
 		if (i != (WINSIZE.ws_row-1))
 			putchar(0x0a);
 	}
+=======
+	for (i = 0; i < WINSIZE.ws_row; ++i)
+	  {
+		deleteline();
+		if (i != (WINSIZE.ws_row-1))
+			putchar(0x0a);
+	  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	putchar(0x0d);
 }
 
 void
 up(int UP)
 {
+<<<<<<< HEAD
 	int		i;
+=======
+	static int		i;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	for (i = 0; i < UP; ++i)
 		printf("\e[A");
@@ -1321,7 +1847,11 @@ up(int UP)
 void
 down(int DOWN)
 {
+<<<<<<< HEAD
 	int		i;
+=======
+	static int		i;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	for (i = 0; i < DOWN; ++i)
 		printf("\e[B");
@@ -1330,7 +1860,11 @@ down(int DOWN)
 void
 left(int LEFT)
 {
+<<<<<<< HEAD
 	int		i;
+=======
+	static int		i;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	for (i = 0; i < LEFT; ++i)
 		printf("\e[D");
@@ -1339,7 +1873,11 @@ left(int LEFT)
 void
 right(int RIGHT)
 {
+<<<<<<< HEAD
 	int		i;
+=======
+	static int		i;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	for (i = 0; i < RIGHT; ++i)
 		printf("\e[C");
@@ -1349,7 +1887,11 @@ right(int RIGHT)
 void
 fill_line(char *colour)
 {
+<<<<<<< HEAD
 	int		i;
+=======
+	static int		i;
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	putchar(0x0d);
 	printf("%s", colour);
@@ -1367,6 +1909,7 @@ fill(void)
 
 	up(WINSIZE.ws_row-1);
 	for (i = 0; i < WINSIZE.ws_row; ++i)
+<<<<<<< HEAD
 	{
 		for (j = 0; j < WINSIZE.ws_col; ++j)
 			putchar(0x20);
@@ -1374,12 +1917,21 @@ fill(void)
 		if (i != (WINSIZE.ws_row-1))
 			printf("\r\n");
 	}
+=======
+	  {
+		for (j = 0; j < WINSIZE.ws_col; ++j)
+			putchar(0x20);
+		if (i != (WINSIZE.ws_row-1))
+			printf("\r\n");
+	  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 }
 
 /* thread-related functions */
 void *
 show_progress(void *arg)
 {
+<<<<<<< HEAD
 	size_t		len, to_print;
 	double		float_current_progress, float_current_progress_save, period, min;
 	unsigned	current_progress, current_progress_save;
@@ -1397,11 +1949,25 @@ show_progress(void *arg)
 	 *   If we only need 50 blocks for the bar, then
 	 * each block is worth 2%, etc.
 	 */
+=======
+	static size_t		len, to_print;
+	static double		progress, prog_sv, period, min;
+	static int		i;
+	static unsigned		int_prog, int_prog_sv;
+
+	len = strlen((char *)arg);
+	int_prog &= ~int_prog;
+	int_prog_sv &= ~int_prog_sv;
+	prog_sv = progress = 0.0;
+	to_print = (WINSIZE.ws_col-len-4);
+
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	period = ((double)100/(double)to_print);
 	min = period;
 
 	printf("%s%s\e[m", DISPLAY_COLOUR, (char *)arg);
 	for (;;)
+<<<<<<< HEAD
 	{
 		while ((float_current_progress = ((double)global_data.done_lines / (double)global_data.total_lines)) == float_current_progress_save);
 		float_current_progress_save = float_current_progress;
@@ -1453,6 +2019,43 @@ show_progress(void *arg)
 
 		float_current_progress = float_current_progress_save = 0.0;
 	}
+=======
+	  {
+		while ((progress = ((double)global_data.done_lines / (double)global_data.total_lines)) == prog_sv);
+		prog_sv = progress;
+		if ((ceil(progress * 100)-(progress*100)) < ((progress*100) - floor(progress * 100)))
+			int_prog = (unsigned)ceil(progress * 100);
+		else if ((ceil(progress * 100)-(progress*100)) > ((progress*100) - floor(progress * 100)))
+			int_prog = (unsigned)floor(progress * 100);
+		else
+			int_prog = (unsigned)ceil(progress * 100);
+		if (progress == 1)
+		  {
+			while (to_print > 0)
+			  {
+				printf("%s%c\e[m", PROGRESS_COLOUR, 0x23);
+				--to_print;
+			  }
+			right(to_print);
+			printf("%s%3d%%\e[m\r\n", DISPLAY_COLOUR, (unsigned)int_prog);
+			goto __show_progress_end;
+		  }
+		if ((progress*100) >= min)
+		  {
+			printf("%s%c\e[m", PROGRESS_COLOUR, 0x23);
+			while (min < (progress*100))
+				min += period;
+			--to_print;
+		  }
+		if (int_prog_sv != int_prog)
+		  {
+			right(to_print);
+			printf("%s%3d%%\e[m", DISPLAY_COLOUR, (unsigned)int_prog);
+			left(to_print+3);
+			int_prog_sv = int_prog;
+		  }
+	  }
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 
 	__show_progress_end:
 	printf("\e[m");
@@ -1463,7 +2066,11 @@ void
 print_fileinfo(char *filename)
 {
 	static struct stat		statb;
+<<<<<<< HEAD
 	static char			buffer[512];
+=======
+	static char			buffer[256];
+>>>>>>> cca6d759a1de7e0a43aa2ec2bd209559708b712f
 	static struct tm		*TIME = NULL;
 	static mode_t			mode;
 
