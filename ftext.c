@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,73 +35,73 @@
 #define OLD_FILE_MAP		MAP_SHARED
 #define OLD_FILE_PROT		(PROT_READ|PROT_WRITE)
 
-#define debug(__string, __int, __string2)						\
-{											\
-	if (DEBUG)									\
-	  {										\
-		fprintf(debug_fp,							\
-		"%20s %d: %s line %d (%ld)\r\n",						\
-		(__string),								\
-		((__int)?(__int):0),							\
-		((__string2)?(__string2):""),						\
-		__LINE__,								\
-		time(NULL));								\
-	  }										\
+#define debug(__string, __int, __string2)	\
+{																					\
+	if (DEBUG)															\
+	{																				\
+		fprintf(debug_fp,											\
+		"%20s %d: %s line %d (%ld)\r\n",			\
+		(__string),														\
+		((__int)?(__int):0),									\
+		((__string2)?(__string2):""),					\
+		__LINE__,															\
+		time(NULL));													\
+	}																				\
 }
 
-#define p_error(s, r)									\
-{											\
-	if (errno == 0)									\
-		errno = EINVAL;								\
+#define p_error(s, r)		\
+{												\
+	if (errno == 0)				\
+		errno = EINVAL;			\
 	fprintf(stderr, "%s: %s: line %d\r\n", (s), strerror(errno), __LINE__);		\
-	debug((s), (r), NULL);								\
-	if ((r) != 0xff)								\
-		return ((r));								\
-	else										\
-		exit((r));								\
+	debug((s), (r), NULL);\
+	if ((r) != 0xff)			\
+		return ((r));				\
+	else									\
+		exit((r));					\
 }
 
-#define reset_global()									\
-{											\
-	global_data.total_lines &= ~global_data.total_lines;				\
-	global_data.done_lines &= ~global_data.done_lines;				\
-	global_data.total_lines = do_line_count(filename);				\
+#define reset_global()																\
+{																											\
+	global_data.total_lines = 0;												\
+	global_data.done_lines = 0;													\
+	global_data.total_lines = do_line_count(filename);	\
 }
 
-#define open_map()									\
-{											\
-	memset(&statb, 0, sizeof(statb));						\
-	lstat(filename, &statb);							\
-	if ((fd_old = open(filename, OLD_FILE_FLAGS)) < 0)				\
-	  {										\
-		fprintf(stderr,								\
-		"failed to open \"%s\": %s (line %d)\r\n",				\
-		filename, strerror(errno), __LINE__);					\
-	  }										\
-	debug("opened file on", fd_old, NULL);						\
+#define open_map()																							\
+{																																\
+	memset(&statb, 0, sizeof(statb));															\
+	lstat(filename, &statb);																			\
+	if ((fd_old = open(filename, OLD_FILE_FLAGS)) < 0)						\
+	{ 																														\
+		fprintf(stderr,																							\
+		"failed to open \"%s\": %s (line %d)\r\n",									\
+		filename, strerror(errno), __LINE__);												\
+	}																															\
+	debug("opened file on", fd_old, NULL);												\
 	map = mmap(NULL, statb.st_size, OLD_FILE_PROT, OLD_FILE_MAP, fd_old, 0);	\
-	if (map == MAP_FAILED)								\
-	  {										\
-		fprintf(stderr,								\
-		"failed to map \"%s\" into memory: %s (line %d)\r\n",			\
-		filename, strerror(errno), __LINE__);					\
-	  }										\
-	debug("mapped file into memory", 0, filename);					\
-	close(fd_old);									\
-	if (mlock(map, statb.st_size) < 0)						\
-	  {										\
-		fprintf(stderr,								\
-		"failed to lock memory (%p to %p): %s (line %d)\r\n",			\
+	if (map == MAP_FAILED)																				\
+	{																															\
+		fprintf(stderr,																							\
+		"failed to map \"%s\" into memory: %s (line %d)\r\n",				\
+		filename, strerror(errno), __LINE__);												\
+	}																															\
+	debug("mapped file into memory", 0, filename);								\
+	close(fd_old);																								\
+	if (mlock(map, statb.st_size) < 0)														\
+	{																															\
+		fprintf(stderr,																							\
+		"failed to lock memory (%p to %p): %s (line %d)\r\n",				\
 		map, (map + (statb.st_size - 1)), strerror(errno), __LINE__);		\
-	  }										\
-	debug("locked region of mapped memory", 0, NULL);				\
+	}																															\
+	debug("locked region of mapped memory", 0, NULL);							\
 	if ((fd_new = open(output, CREATION_FLAGS, CREATION_MASK)) < 0)			\
-	  {										\
-		fprintf(stderr,								\
-		"failed to open \"%s\" file: %s (line %d)\r\n",				\
-		output, strerror(errno), __LINE__);					\
-	  }										\
-	debug("opened output file on", fd_new, NULL);					\
+	{																															\
+		fprintf(stderr,																							\
+		"failed to open \"%s\" file: %s (line %d)\r\n",							\
+		output, strerror(errno), __LINE__);													\
+	}																															\
+	debug("opened output file on", fd_new, NULL);									\
 }
 
 #define close_unmap()									\
@@ -127,14 +128,14 @@
 #define clear_struct(s) memset((s), 0, sizeof(*(s)))
 		
 // file manipulation functions
-ssize_t	check_file(char *) __THROW __nonnull ((1)) __wur;
-ssize_t change_length(char *) __THROW __nonnull ((1)) __wur;
-ssize_t	change_line_length(char *) __THROW __nonnull ((1)) __wur;
-ssize_t	justify_text(char *) __THROW __nonnull ((1)) __wur;
-ssize_t unjustify_text(char *) __THROW __nonnull ((1)) __wur;
-ssize_t left_align_text(char *) __THROW __nonnull ((1)) __wur;
-ssize_t right_align_text(char *) __THROW __nonnull ((1)) __wur;
-ssize_t centre_align_text(char *) __THROW __nonnull ((1)) __wur;
+ssize_t	check_file(char *) __nonnull((1)) __wur;
+ssize_t change_length(char *) __nonnull((1)) __wur;
+ssize_t	change_line_length(char *) __nonnull((1)) __wur;
+ssize_t	justify_text(char *) __nonnull((1)) __wur;
+ssize_t unjustify_text(char *) __nonnull((1)) __wur;
+ssize_t left_align_text(char *) __nonnull((1)) __wur;
+ssize_t right_align_text(char *) __nonnull((1)) __wur;
+ssize_t centre_align_text(char *) __nonnull((1)) __wur;
 
 // screen-drawing functions
 void clear(void);
@@ -145,18 +146,18 @@ void up(int);
 void down(int);
 void left(int);
 void right(int);
-void fill_line(char *) __THROW __nonnull ((1));
+void fill_line(char *) __nonnull((1));
 void fill(void);
 
 // data-related functions
-int do_line_count(char *) __THROW __nonnull ((1));
-void print_fileinfo(char *) __THROW __nonnull ((1));
+int do_line_count(char *) __nonnull((1));
+void print_fileinfo(char *) __nonnull((1));
 
 // thread-related functions
 void *show_progress(void *);
 
 // misc
-void usage(void) __attribute__ ((__noreturn__));
+void usage(void) __attribute__((__noreturn__));
 
 			/* GLOBAL VARIABLES */
 struct GLOBAL_DATA
@@ -181,6 +182,20 @@ static char		*debug_log = "debug.log";
 // tmp files
 static char		*output = "output.tmp";
 // global flags
+static uint32_t	user_options;
+#define test_flag(f) (user_options & (f))
+#define set_flag(f) (user_options |= (f))
+#define unset_flag(f) (user_options &= ~(f))
+
+#define JUSTIFY		0x1
+#define UNJUSTIFY 0x2
+#define LENGTH		0x4
+#define LALIGN		0x8
+#define RALIGN		0x10
+#define CALIGN		0x20
+#define DEBUG			0x40
+
+#if 0
 static int		JUSTIFY = 0;
 static int		UNJUSTIFY = 0;
 static int		LENGTH = 0;
@@ -188,18 +203,18 @@ static int		LALIGN = 0;
 static int		RALIGN = 0;
 static int		CALIGN = 0;
 static int		DEBUG = 0;
+#endif
 
 		/* Thread-related variables */
-//static pthread_mutex_t			MUTEX;
 static pthread_attr_t			tATTR;
 static pthread_t			TID_SP;
-//static sigjmp_buf			__jb_sp;
-static char				*__sp_str_format =    "[ Changing line length ]";
-static char				*__sp_str_justify =   "[   Justifying lines   ]";
-static char				*__sp_str_unjustify = "[  Unjustifying lines  ]";
-static char				*__sp_str_lalign =    "[  Left aligning lines ]";
-static char				*__sp_str_ralign =    "[ Right aligning lines ]";
-static char				*__sp_str_calign =    "[    Centering lines   ]";
+
+#define STR_PROGRESS_LENGTH	 		"[ Changing line length ]"
+#define STR_PROGRESS_JUSTIFY		"[   Justifying lines   ]"
+#define STR_PROGRESS_UNJUSTIFY	"[  Unjustifying lines  ]"
+#define STR_PROGRESS_LALIGN			"[  Left aligning lines ]"
+#define STR_PROGRESS_RALIGN			"[ Right aligning lines ]"
+#define STR_PROGRESS_CALIGN			"[    Centering lines   ]"
 
 int
 main(int argc, char *argv[])
@@ -222,58 +237,63 @@ main(int argc, char *argv[])
 		switch(c)
 		{
 			case(0x44):
-			DEBUG = 1;
+			set_flag(DEBUG);
 			debug_fd = open(debug_log, O_RDWR|O_CREAT|O_TRUNC|O_FSYNC, S_IRUSR|S_IWUSR);
 			debug_fp = fdopen(debug_fd, "r+");
 			debug("main: opened log for debugging", 0, NULL);
 			break;
 			case(0x6c):
-			LALIGN = 1;
+			set_flag(LALIGN);
 			break;
 			case(0x72):
-			RALIGN = 1;
+			set_flag(RALIGN);
 			break;
 			case(0x63):
-			CALIGN = 1;
+			set_flag(CALIGN);
 			break;
 			case(0x4c):
 			MAX_LENGTH = atoi(optarg);
-			LENGTH = 1;
+			set_flag(LENGTH);
 			break;
 			case(0x6a):
-			JUSTIFY = 1;
+			set_flag(JUSTIFY);
 			break;
 			case(0x75):
-			UNJUSTIFY = 1;
+			set_flag(UNJUSTIFY);
 			break;
 			case(0x68):
 			usage();
 			break;
 			case(0x3f):
-			p_error("invalid option specified", 0xff);
+			p_error("invalid option specified", EXIT_FAILURE);
 			break;
 			default:
-			p_error("invalid option specified", 0xff);
+			p_error("invalid option specified", EXIT_FAILURE);
 		}
 	}
 
-	if (UNJUSTIFY && JUSTIFY)
+	if (test_flag(UNJUSTIFY) && test_flag(JUSTIFY))
 		p_error("cannot have both -j and -u", 0xff);
 
-	if (JUSTIFY && (LALIGN || RALIGN || CALIGN))
+	if (test_flag(JUSTIFY)
+			&& (test_flag(LALIGN)
+			|| test_flag(RALIGN)
+			|| test_flag(CALIGN)))
 		p_error("cannot have -j with -r or -c", 0xff);
 
-	if ((RALIGN && (CALIGN || LALIGN)) || (CALIGN && (RALIGN || LALIGN)))
+	if ((test_flag(RALIGN)
+			&& (test_flag(CALIGN)
+			|| test_flag(LALIGN)))
+			|| (test_flag(CALIGN)
+			&& (test_flag(RALIGN)
+			|| test_flag(LALIGN))))
 		p_error("options -l, -r and -c are mutually exclusive", 0xff);
 
 	if (LENGTH && UNJUSTIFY)
-	{
-		UNJUSTIFY = 0;
-		debug("main: switched off UNJUSTIFY flag (unncessary used with -L)", 0, NULL);
-	}
+		unset_flag(UNJUSTIFY);
 
 	if (check_file(argv[optind]) == -1)
-		p_error("main", 0xff);
+		p_error("main", EXIT_FAILURE);
 
 	clear();
 	fill();
@@ -282,58 +302,58 @@ main(int argc, char *argv[])
 	print_fileinfo(argv[optind]);
 	down(POSITION-2);
 
-	if (LENGTH)
+	if (test_flag(LENGTH))
 	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_format);
+		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_LENGTH);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (change_line_length(argv[optind]) == -1)
-			goto __err;
+			goto fail;
 	}
 
-	if (JUSTIFY)
+	if (test_flag(JUSTIFY))
 	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_justify);
+		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_JUSTIFY);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (justify_text(argv[optind]) == -1)
-			goto __err;
+			goto fail;
 	}
 	
-	if (UNJUSTIFY)
+	if (test_flag(UNJUSTIFY))
 	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_unjustify);
+		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_UNJUSTIFY);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (unjustify_text(argv[optind]) == -1)
-			goto __err;
+			goto fail;
 	}
 
-	if (LALIGN)
+	if (test_flag(LALIGN))
 	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_lalign);
+		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_LALIGN);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (left_align_text(argv[optind]) == -1)
-			goto __err;
+			goto fail;
 	}
 
-	if (RALIGN)
+	if (test_flag(RALIGN))
 	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_ralign);
+		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_RALIGN);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (right_align_text(argv[optind]) == -1)
-			goto __err;
+			goto fail;
 	}
 
-	if (CALIGN)
+	if (test_flag(CALIGN))
 	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)__sp_str_calign);
+		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_CALIGN);
 		debug("main: created thread", (int)TID_SP, NULL);
 		if (centre_align_text(argv[optind]) == -1)
-			goto __err;
+			goto fail;
 	}
 
 	exit(0);
 
-	__err:
-	exit(0xff);
+	fail:
+	exit(EXIT_FAILURE);
 }
 
 ssize_t
@@ -574,7 +594,7 @@ justify_text(char *filename)
 					{
 						fprintf(stderr,
 						"Text already justified\r\n");
-						goto __err;
+						goto fail;
 					}
 				}
 				++p; ++char_cnt;
@@ -619,7 +639,7 @@ justify_text(char *filename)
 			fprintf(stderr, "counted more characters than are in the longest line\r\n"
 					"count %d: longest line %d\r\n",
 				char_cnt, MAX_LENGTH);
-			goto __err;
+			goto fail;
 		}
 
 
@@ -637,7 +657,7 @@ justify_text(char *filename)
 			fprintf(stderr,
 				"justify length specified too short (%d - length of line %d)\r\n",
 				MAX_LENGTH, char_cnt);
-			goto __err;
+			goto fail;
 		}
 		else if (MAX_LENGTH == char_cnt)
 		{
@@ -791,7 +811,7 @@ justify_text(char *filename)
 	pthread_join(TID_SP, NULL);
 	return(0);
 
-	__err:
+	fail:
 	pthread_kill(TID_SP, SIGINT);
 	if (mlock(map, statb.st_size) < 0)
 	{
@@ -806,10 +826,10 @@ justify_text(char *filename)
 		filename, strerror(errno), __LINE__);
 		
 	}
-	debug("justify_text: __err: unmapped file from memory", 0, NULL);
+	debug("justify_text: fail: unmapped file from memory", 0, NULL);
 	close(fd_new);
 	unlink(output);
-	debug("justify_text: __err: unlinked output file", 0, filename);
+	debug("justify_text: fail: unlinked output file", 0, filename);
 	close(fd_old);
 
 	return -1;
@@ -1170,23 +1190,34 @@ right_align_text(char *filename)
 ssize_t
 centre_align_text(char *filename)
 {
-	char		*p = NULL, *start = NULL, *end = NULL, *end2 = NULL;
+	char		*p = NULL;
+	char		*start = NULL;
+	char		*end = NULL;
+	char		*end2 = NULL;
 	char		c;
-	int		fd_old, fd_new, i, char_cnt, delta;
+	int			fd_old;
+	int			fd_new;
+	int			i;
+	int			char_cnt;
+	int			delta;
 	void		*map = NULL;
+	char		*map_end = NULL;
 	struct stat	statb;
 
 	reset_global();
 	open_map();
 
+	map_end = ((char *)map + statb.st_size);
+
 	p = (char *)map;
 
-	if (!LENGTH)
+	if (!test_flag(LENGTH))
 	{
 		MAX_LENGTH = 0;
-		while (p < ((char *)map + statb.st_size))
+		while (p < map_end)
 		{
-			char_cnt &= ~char_cnt;
+			char_cnt = 0;
+
 			while (*p != 0x0a)
 			{
 				if (*p == 0x20)
@@ -1196,6 +1227,7 @@ centre_align_text(char *filename)
 						++p;
 					continue;
 				}
+
 				++char_cnt;
 				++p;
 			}
@@ -1210,7 +1242,7 @@ centre_align_text(char *filename)
 	}
 
 	start = p;
-	while (p < ((char *)map + statb.st_size))
+	while (p < map_end)
 	{
 		if (*p == 0x0a)
 		{
@@ -1228,7 +1260,7 @@ centre_align_text(char *filename)
 		start = p;
 
 		char_cnt = 0;
-		while (*p != 0x0a && p < ((char *)map + statb.st_size))
+		while (*p != 0x0a && p < map_end)
 		{
 			if (*p == 0x20)
 			{
@@ -1237,6 +1269,7 @@ centre_align_text(char *filename)
 					++p;
 				continue;
 			}
+
 			++char_cnt;
 			++p;
 		}
@@ -1255,18 +1288,20 @@ centre_align_text(char *filename)
 		i = 0;
 		c = 0x20;
 
-		while (i < (delta/2))
+		double half_delta = delta / 2;
+
+		while (i < half_delta)
 		{
 			write(fd_new, &c, 1);
 			++i;
 		}
 
-			//line_buf[i++] = 0x20;
+		//line_buf[i++] = 0x20;
 
 		p = start;
 		write(fd_new, p, (end-p));
 
-			//line_buf[i++] = *p++;
+		//line_buf[i++] = *p++;
 
 		while (*end2 == 0x0a)
 		{
@@ -1290,11 +1325,14 @@ do_line_count(char *filename)
 {
 	int			fd, count;
 	void		*map = NULL;
+	char		*map_end = NULL;
 	struct	stat	statb;
 	char		*p = NULL;
 
 	debug("do_line_count: opening file", 0, filename);
-	memset(&statb, 0, sizeof(statb));
+
+	clear_struct(&statb);
+
 	if (lstat(filename, &statb) < 0)
 		p_error("do_line_count: lstat error", -1);
 	if ((fd = open(filename, O_RDONLY)) < 0)
@@ -1307,8 +1345,9 @@ do_line_count(char *filename)
 
 	count = 0;
 	p = (char *)map;
+	map_end = ((char *)map + statb.st_size);
 
-	while (p < ((char *)map + statb.st_size))
+	while (p < map_end)
 	{
 		if (*p == 0x0a)
 			++count;
@@ -1320,7 +1359,7 @@ do_line_count(char *filename)
 		p_error("do_line_count: error unlocking mapped memory", -1);
 
 	munmap(map, statb.st_size);
-	return(count);
+	return count;
 }
 
 // screen-drawing functions
