@@ -1,6 +1,12 @@
 # ftext
-Format .txt files
 
-Use ftext to format .txt files. Change the line length, text alignment (justify, right-align, centre, left-align). For example,
-"./ftext -L 72 -j my_text_document.txt". This will adjust the length of the lines to 72 characters and will justify the text.
-Displays a progress bar in the terminal window while carrying out each operation (using pthreads).
+Very simple utility for formatting .txt files. Change line length, justify, right-align, centre-align, left-align.
+
+Example usage:
+
+```
+ftext -L 72 -j text_document.txt
+```
+Changes line length to a maximum of 72 characters and justifies the lines.
+
+Neatly displays the progress of the operation(s) in the terminal window.
