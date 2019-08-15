@@ -18,124 +18,351 @@
 #include <unistd.h>
 
 /*
- * Need a large line buffer because there are cases where
- * there are actually no new line characters at all until
- * the end of the paragraph (and paragraphs can of course
- * be pretty large)
+ * (14/08/2019) -- Complete rewrite of how the mapped file is handled and
+ * how each operation is actually carried out. Before, the operations
+ * copied the data from the memory mapped region and modified it as
+ * necessary. A new file was therefore created, and once complete, the old
+ * file would be unlinked. So each function mapped the old file, created
+ * a brand new file, wrote to it while carrying out its purpose, unmapped
+ * the old file, and then unlinked. This seems like an overly expensive
+ * method of formatting a .txt file. There's also the fact that some may
+ * prefer that their files maintain an original creation timestamp.
+ *
+ * New method passes a mapped_file_t to each function. Any modification
+ * of the mapped data is carried out with the help of functions like
+ * posix_fallocate(), mremap(), memcpy(), memmove(), memset(), etc. So we
+ * are always working on the same mapped file. Hopefully, this is, on
+ * the whole, less expensive than the old method, despite the mremap().
+ * But given that most of the mremap() usage is in order to add a space
+ * character (so extending the map by a single byte), I imagine this
+ * usually would not require a copying of the map to another location.
+ *
  */
-#define LINE_BUF_SIZE				32368
 
 #define PROGRESS_COLOUR			"\e[48;5;2m\e[38;5;16m"
 #define DISPLAY_COLOUR			"\e[48;5;255m\e[38;5;208m"
 #define FILE_STATS_COLOUR		"\e[48;5;240m\e[38;5;208m"
 
-#define CREATION_FLAGS	(O_RDWR|O_CREAT|O_TRUNC|O_FSYNC)
-#define CREATION_MASK		(S_IRWXU & ~S_IXUSR)
-#define OLD_FILE_FLAGS	O_RDWR
-#define OLD_FILE_MAP		MAP_SHARED
-#define OLD_FILE_PROT		(PROT_READ|PROT_WRITE)
-
-#define debug(__string, __int, __string2)	\
-{																					\
-	if (DEBUG)															\
-	{																				\
-		fprintf(debug_fp,											\
-		"%20s %d: %s line %d (%ld)\r\n",			\
-		(__string),														\
-		((__int)?(__int):0),									\
-		((__string2)?(__string2):""),					\
-		__LINE__,															\
-		time(NULL));													\
-	}																				\
-}
-
-#define p_error(s, r)		\
-{												\
-	if (errno == 0)				\
-		errno = EINVAL;			\
-	fprintf(stderr, "%s: %s: line %d\r\n", (s), strerror(errno), __LINE__);		\
-	debug((s), (r), NULL);\
-	if ((r) != 0xff)			\
-		return ((r));				\
-	else									\
-		exit((r));					\
-}
-
-#define reset_global()																\
-{																											\
-	global_data.total_lines = 0;												\
-	global_data.done_lines = 0;													\
-	global_data.total_lines = do_line_count(filename);	\
-}
-
-#define open_map()																							\
-{																																\
-	memset(&statb, 0, sizeof(statb));															\
-	lstat(filename, &statb);																			\
-	if ((fd_old = open(filename, OLD_FILE_FLAGS)) < 0)						\
-	{ 																														\
-		fprintf(stderr,																							\
-		"failed to open \"%s\": %s (line %d)\r\n",									\
-		filename, strerror(errno), __LINE__);												\
-	}																															\
-	debug("opened file on", fd_old, NULL);												\
-	map = mmap(NULL, statb.st_size, OLD_FILE_PROT, OLD_FILE_MAP, fd_old, 0);	\
-	if (map == MAP_FAILED)																				\
-	{																															\
-		fprintf(stderr,																							\
-		"failed to map \"%s\" into memory: %s (line %d)\r\n",				\
-		filename, strerror(errno), __LINE__);												\
-	}																															\
-	debug("mapped file into memory", 0, filename);								\
-	close(fd_old);																								\
-	if (mlock(map, statb.st_size) < 0)														\
-	{																															\
-		fprintf(stderr,																							\
-		"failed to lock memory (%p to %p): %s (line %d)\r\n",				\
-		map, (map + (statb.st_size - 1)), strerror(errno), __LINE__);		\
-	}																															\
-	debug("locked region of mapped memory", 0, NULL);							\
-	if ((fd_new = open(output, CREATION_FLAGS, CREATION_MASK)) < 0)			\
-	{																															\
-		fprintf(stderr,																							\
-		"failed to open \"%s\" file: %s (line %d)\r\n",							\
-		output, strerror(errno), __LINE__);													\
-	}																															\
-	debug("opened output file on", fd_new, NULL);									\
-}
-
-#define close_unmap()									\
-{											\
-	if (munlock(map, statb.st_size) < 0)						\
-	  {										\
-		fprintf(stderr,								\
-		"failed to unlock memory (%p to %p): %s (line %d)\r\n",			\
-		map, (map + (statb.st_size - 1)), strerror(errno), __LINE__);		\
-	  }										\
-	debug("unlocked mapped memory region", 0, NULL);				\
-	if (munmap(map, statb.st_size) < 0)						\
-	  {										\
-		fprintf(stderr,								\
-		"failed to unmap memory (%p to %p): %s (line %d)\r\n",			\
-		map, (map + (statb.st_size - 1)), strerror(errno), __LINE__);		\
-	  }										\
-	debug("unmapped file from memory", 0, filename);				\
-	close(fd_new);									\
-	unlink(filename);								\
-	rename(output, filename);							\
+#define reset_global()					\
+{																\
+	global_data.total_lines = 0;	\
+	global_data.done_lines = 0;		\
 }
 
 #define clear_struct(s) memset((s), 0, sizeof(*(s)))
-		
-// file manipulation functions
-ssize_t	check_file(char *) __nonnull((1)) __wur;
-ssize_t change_length(char *) __nonnull((1)) __wur;
-ssize_t	change_line_length(char *) __nonnull((1)) __wur;
-ssize_t	justify_text(char *) __nonnull((1)) __wur;
-ssize_t unjustify_text(char *) __nonnull((1)) __wur;
-ssize_t left_align_text(char *) __nonnull((1)) __wur;
-ssize_t right_align_text(char *) __nonnull((1)) __wur;
-ssize_t centre_align_text(char *) __nonnull((1)) __wur;
+
+#ifndef PATH_MAX
+# define PATH_MAX 1024
+#endif
+
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+
+static int MAX_LENGTH = 0;
+
+typedef struct mapped_file_t
+{
+	char		filename[PATH_MAX];
+	int			fd;
+	void		*startp;
+	void		*endp;
+	size_t	map_size;
+	size_t	original_file_size;
+	size_t	current_file_size;
+	int			flags; // MAP_SHARED / MAP_PRIVATE...
+} mapped_file_t;
+
+typedef struct global_data_t
+{
+	int		total_lines;
+	int		done_lines;
+} global_data_t;
+
+/*
+ * Remove a byte range from the file and vma by taking the data
+ * from [STARTP+OFFSET+RANGE,ENDP) and moving it to
+ * [STARTP+OFFSET,ENDP-RANGE). Data from [ENDP-RANGE,ENDP)
+ * is zeroed out and then the vma is adjusted to be
+ * [STARTP,ENDP-RANGE). File is then truncated. The dirty page(s)
+ * in the vma will be written back to disc later by the kernel.
+ */
+static int
+__collapse_file(mapped_file_t *f, off_t offset, size_t range)
+{
+	assert(f);
+
+	if (offset < 0 || offset >= f->map_size)
+		return 0;
+
+	char	*to = ((char *)f->startp + offset);
+	char	*from = (to + range);
+	char	*endp = ((char *)f->endp);
+	int		flags;
+	size_t	map_size = f->map_size;
+
+	memmove(to, from, (endp - from));
+	to = (endp - range);
+	memset(to, 0, range);
+
+	flags = 0;
+	f->flags = flags = (MAP_SHARED|MAP_FIXED);
+	f->map_size = (map_size -= range);
+
+	if ((f->startp = mmap(f->startp, map_size, PROT_READ|PROT_WRITE, flags, f->fd, 0)) == MAP_FAILED)
+	{
+		fprintf(stderr, "__collapse_file: mmap error (%s)\n", strerror(errno));
+		return -1;
+	}
+
+	f->endp = ((char *)f->startp + map_size);
+
+	if (ftruncate(f->fd, f->current_file_size -= range) < 0)
+	{
+		fprintf(stderr, "__collapse_file: ftruncate error (%s)\n", strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
+/*
+ * Allocate BY bytes of disc space at the end of the file and
+ * update the vma accordingly. We ask the kernel to keep the
+ * vma at the same start address with MAP_FIXED, because we'd
+ * like to be efficient and not needlessly copy the entire
+ * vma to another location...
+ */
+static void *
+__extend_file_and_map(mapped_file_t *f, off_t by)
+{
+	assert(f);
+
+	size_t	map_size = f->map_size;
+	int			flags = f->flags;
+	
+	if (by <= 0)
+		return f->startp;
+
+	if (posix_fallocate(f->fd, (size_t)((char *)f->endp - (char *)f->startp), (size_t)by) < 0)
+	{
+		fprintf(stderr, "__extend_file_and_map: posix_fallocate error (%s)\n", strerror(errno));
+		return NULL;
+	}
+
+	f->current_file_size += (size_t)by;
+
+	map_size += by;
+	f->flags = (flags |= MAP_FIXED);
+
+	if ((f->startp = mmap(f->startp, map_size, PROT_READ|PROT_WRITE, flags, f->fd, 0)) == MAP_FAILED)
+	{
+		fprintf(stderr, "__extend_file_and_map: mmap error (%s)\n", strerror(errno));
+		return NULL;
+	}
+
+	f->map_size = map_size;
+	f->endp = ((char *)f->startp + map_size);
+
+	return f->startp;
+}
+
+/*
+ * Shift the data from [STARTP+OFFSET,ENDP) to [STARTP+OFFSET+BY,ENDP+BY).
+ * User should have already called __extend_file_and_map() so that
+ * there is enough disc space and bytes at end of vma for the shift.
+ * F->ENDP will be pointing BY bytes pas the old end. So what we want
+ * here is to shift the range [FROM,ENDP-BY) to [TO,ENDP).
+ * Data in [FROM,TO) is zeroed out.
+ */
+static void
+__shift_file_data(mapped_file_t *f, off_t offset, size_t by)
+{
+	assert(f);
+
+	char	*from = ((char *)f->startp + offset);
+	char	*to = ((char *)from + by);
+	char	*endp = ((char *)f->endp - by);
+	size_t	bytes;
+	
+	bytes = (endp - from);
+	memmove((void *)to, (void *)from, bytes);
+	memset(from, 0, by);
+
+	return;
+}
+
+int
+__do_line_count(mapped_file_t *f)
+{
+	assert(f);
+
+	char	*p = (char *)f->startp;
+	char	*endp = (char *)f->endp;
+	int		lines = 0;
+
+	while (p < endp)
+	{
+		if (*p == 0x0a)
+			++lines;
+
+		++p;
+	}
+
+	return lines;
+}
+
+/*
+ * Some formatting options require knowing the longest line
+ * in the file in order to format the other lines accordingly.
+ * E.g., justifying the text means adding enough spaces to
+ * all lines shorter than the longest line; centre-aligning
+ * means knowing the character offset of the centre of longest
+ * line.
+ */
+static int
+__get_length_longest_line(mapped_file_t *f)
+{
+	assert(f);
+
+	int		max_length = 0;
+	int		char_cnt = 0;
+	char	*p = (char *)f->startp;
+	char	*endp = (char *)f->endp;
+	char	*line_start = NULL;
+	char	*line_end = NULL;
+	size_t	len = f->map_size;
+
+	while (p < endp)
+	{
+		char_cnt = 0;
+		line_start = p;
+
+		while (*p == 0x20 || *p == 0x09)
+			++p;
+
+		len -= (p - line_start);
+
+		line_start = p;
+	
+		line_end = memchr(line_start, 0x0a, len);
+
+		if (!line_end)
+			break;
+
+		while (p < line_end)
+		{
+			if (*p == 0x20)
+			{
+				++p;
+				++char_cnt;
+
+				while (*p == 0x20)
+					++p;
+
+				continue;
+			}
+			else
+			if (*p == 0x0a)
+			{
+				break;
+			}
+
+			++p;
+			++char_cnt;
+		}
+
+		if (char_cnt > max_length)
+			max_length = char_cnt;
+
+		while (*p == 0x0a && p < endp)
+			++p;
+
+		len -= (p - line_start);
+	}
+
+	return max_length;
+}
+
+/*
+ * Strip file of 0x0d (\r) characters.
+ */
+static void
+__remove_cr(mapped_file_t *f)
+{
+	char	*prev = NULL;
+	char	*p = NULL;
+	char	*startp = (char *)f->startp;
+	char	*endp = (char *)f->endp;
+	size_t len = f->map_size;
+
+	if (!(p = memchr(startp, 0x0d, len)))
+		return;
+
+	len -= (p - startp);
+
+	while (p < endp)
+	{
+		prev = p;
+
+		__collapse_file(f, (off_t)(p - startp), (size_t)1);
+		--len;
+
+		if (!(p = memchr(prev, 0x0d, len)))
+			break;
+
+		len -= (p - prev);
+	}
+
+	return;
+}
+
+static void
+__normalise_file(mapped_file_t *f)
+{
+	char	*p = (char *)f->startp;
+	char	*startp = (char *)f->startp;
+	char	*endp = (char *)f->endp;
+	char	*prev = NULL;
+
+	__remove_cr(f);
+
+	/*
+	 * Might have some lines where the end of a line
+	 * breaks a word: e.g. "... forg-"
+	 *                     "otten..."
+	 */
+	while (p < endp)
+	{
+		prev = p;
+
+		p = memchr(prev, 0x2d, (endp - prev));
+
+		if (!p)
+			break;
+
+		if (*(p+1) == 0x0a)
+		{
+			__collapse_file(f, (off_t)(p - startp), (size_t)2);
+			endp -= 2;
+		}
+		else
+		{
+			++p;
+		}
+	}
+}
+
+int	check_file(char *) __nonnull((1)) __wur;
+void usage(int) __attribute__((__noreturn__));
+
+/* Text formatting functions */
+ssize_t change_length(mapped_file_t *) __nonnull((1)) __wur;
+ssize_t	justify_text(mapped_file_t *) __nonnull((1)) __wur;
+ssize_t unjustify_text(mapped_file_t *) __nonnull((1)) __wur;
+ssize_t left_align_text(mapped_file_t *) __nonnull((1)) __wur;
+ssize_t right_align_text(mapped_file_t *) __nonnull((1)) __wur;
+ssize_t centre_align_text(mapped_file_t *) __nonnull((1)) __wur;
+ssize_t	change_line_length(mapped_file_t *) __nonnull((1)) __wur;
 
 // screen-drawing functions
 void clear(void);
@@ -153,62 +380,63 @@ void fill(void);
 int do_line_count(char *) __nonnull((1));
 void print_fileinfo(char *) __nonnull((1));
 
-// thread-related functions
+/* Thread that displays progress of each formatting operation */
 void *show_progress(void *);
 
-// misc
-void usage(void) __attribute__((__noreturn__));
 
-			/* GLOBAL VARIABLES */
-struct GLOBAL_DATA
-{
-	int		total_lines;
-	int		done_lines;
-};
+static global_data_t	global_data;
+static mapped_file_t	file;
 
-typedef struct GLOBAL_DATA		GLOBAL_DATA;
-
-static GLOBAL_DATA		global_data;
-static int		MAX_LENGTH = 0;
-//static int				TOTAL_LINES;
-//static int				NEW_TOTAL;
 static struct winsize			WINSIZE;
 static int		POSITION;
 
-static FILE		*debug_fp = NULL;
-static int		debug_fd;
-static char		*debug_log = "debug.log";
-
-// tmp files
-static char		*output = "output.tmp";
 // global flags
 static uint32_t	user_options;
 #define test_flag(f) (user_options & (f))
 #define set_flag(f) (user_options |= (f))
 #define unset_flag(f) (user_options &= ~(f))
 
-#define JUSTIFY		0x1
-#define UNJUSTIFY 0x2
-#define LENGTH		0x4
-#define LALIGN		0x8
-#define RALIGN		0x10
-#define CALIGN		0x20
-#define DEBUG			0x40
+#define LENGTH		0x1u
+#define UNJUSTIFY 0x2u
+#define JUSTIFY		0x4u
+#define LALIGN		0x8u
+#define RALIGN		0x10u
+#define CALIGN		0x20u
 
-#if 0
-static int		JUSTIFY = 0;
-static int		UNJUSTIFY = 0;
-static int		LENGTH = 0;
-static int		LALIGN = 0;
-static int		RALIGN = 0;
-static int		CALIGN = 0;
-static int		DEBUG = 0;
-#endif
+#define ALIGNMENT_MASK	0x3eu
+
+#define test_user_options()																\
+do {																											\
+	if (test_flag(UNJUSTIFY) && test_flag(JUSTIFY))					\
+	{																												\
+		fprintf(stderr, "main: -j and -u are mutually exclusive\n");\
+		goto fail;																						\
+	}																												\
+	if (test_flag(JUSTIFY)																	\
+			&& (test_flag(LALIGN)																\
+			|| test_flag(RALIGN)																\
+			|| test_flag(CALIGN)))															\
+	{																												\
+		fprintf(stderr, "main: can only specify one alignment type\n");\
+		goto fail;																						\
+	}																												\
+	if ((test_flag(RALIGN)																	\
+			&& (test_flag(CALIGN)																\
+			|| test_flag(LALIGN)))															\
+			|| (test_flag(CALIGN)																\
+			&& (test_flag(RALIGN)																\
+			|| test_flag(LALIGN))))															\
+	{																												\
+		fprintf(stderr, "main: can only specify one alignment type\n");\
+		goto fail;																						\
+	}																												\
+	if (test_flag(LENGTH) && test_flag(UNJUSTIFY))					\
+		unset_flag(UNJUSTIFY);																\
+} while (0)
 
 		/* Thread-related variables */
-static pthread_attr_t			tATTR;
+//static pthread_attr_t	tATTR;
 static pthread_t			TID_SP;
-
 #define STR_PROGRESS_LENGTH	 		"[ Changing line length ]"
 #define STR_PROGRESS_JUSTIFY		"[   Justifying lines   ]"
 #define STR_PROGRESS_UNJUSTIFY	"[  Unjustifying lines  ]"
@@ -216,32 +444,96 @@ static pthread_t			TID_SP;
 #define STR_PROGRESS_RALIGN			"[ Right aligning lines ]"
 #define STR_PROGRESS_CALIGN			"[    Centering lines   ]"
 
+/*
+ * Map file into virtual memory.
+ */
+static mapped_file_t *
+map_file(mapped_file_t *f)
+{
+	assert(f);
+
+	char		*filename = f->filename;
+	int			flags;
+	struct stat statb;
+
+	clear_struct(&statb);
+	if (lstat(filename, &statb) < 0)
+	{
+		fprintf(stderr, "map_file: lstat error (%s)\n", strerror(errno));
+		return NULL;
+	}
+
+	f->map_size = f->current_file_size = f->original_file_size = statb.st_size;
+
+	if ((f->fd = open(filename, O_RDWR)) < 0)
+	{
+		fprintf(stderr, "map_file: open error (%s)\n", strerror(errno));
+		return NULL;
+	}
+
+	flags = 0;
+	flags |= MAP_SHARED;
+
+	if ((f->startp = mmap(NULL, f->original_file_size, PROT_READ|PROT_WRITE, flags, f->fd, 0)) == MAP_FAILED)
+	{
+		fprintf(stderr, "map_file: mmap error (%s)\n", strerror(errno));
+		return NULL;
+	}
+
+	f->flags = flags;
+	f->endp = (void *)((char *)f->startp + statb.st_size);
+
+	return f;
+}
+
+/*
+ * Unmap file from virtual memory.
+ */
+static void
+unmap_file(mapped_file_t *f)
+{
+	assert(f);
+
+	void		*startp = f->startp;
+
+	munmap(startp, f->map_size);
+
+	if (f->fd > 2)
+		close(f->fd);
+
+	clear_struct(f);
+
+	return;
+}
+
 int
 main(int argc, char *argv[])
 {
-	static char		c;
+	char		c;
 
-	if (argc == 1)
-		p_error("need to specify path to a file", 0xff);
+	/*
+	 * Minimum number of args is 3, e.g. 'ftext -j file.txt`
+	 */
+	if (argc < 3)
+		usage(EXIT_FAILURE);
 
-	/* initialize variables */
-	memset(&WINSIZE, 0, sizeof(WINSIZE));
+	/*
+	 * Must be done here and not in some constructor function
+	 * because the terminal window dimensions are not known
+	 * before main() is called.
+	 */
+	clear_struct(&WINSIZE);
 	ioctl(STDOUT_FILENO, TIOCGWINSZ, &WINSIZE);
 	setvbuf(stdout, NULL, _IONBF, 0);
-	memset(&global_data, 0, sizeof(global_data));
-	pthread_attr_setdetachstate(&tATTR, PTHREAD_CREATE_DETACHED);
+
+	clear_struct(&global_data);
+	//pthread_attr_setdetachstate(&tATTR, PTHREAD_CREATE_DETACHED);
 
 	opterr = 0;
 	while ((c = getopt(argc, argv, "L:lrcjuDh")) != -1)
 	{
 		switch(c)
 		{
-			case(0x44):
-			set_flag(DEBUG);
-			debug_fd = open(debug_log, O_RDWR|O_CREAT|O_TRUNC|O_FSYNC, S_IRUSR|S_IWUSR);
-			debug_fp = fdopen(debug_fd, "r+");
-			debug("main: opened log for debugging", 0, NULL);
-			break;
 			case(0x6c):
 			set_flag(LALIGN);
 			break;
@@ -262,38 +554,39 @@ main(int argc, char *argv[])
 			set_flag(UNJUSTIFY);
 			break;
 			case(0x68):
-			usage();
+			usage(EXIT_SUCCESS);
 			break;
 			case(0x3f):
-			p_error("invalid option specified", EXIT_FAILURE);
+			fprintf(stderr, "main: invalid option ('%c')\n", c);
+			exit(EXIT_FAILURE);
 			break;
 			default:
-			p_error("invalid option specified", EXIT_FAILURE);
+			fprintf(stderr, "main: invalid option ('%c')\n", c);
+			exit(EXIT_FAILURE);
 		}
 	}
 
-	if (test_flag(UNJUSTIFY) && test_flag(JUSTIFY))
-		p_error("cannot have both -j and -u", 0xff);
-
-	if (test_flag(JUSTIFY)
-			&& (test_flag(LALIGN)
-			|| test_flag(RALIGN)
-			|| test_flag(CALIGN)))
-		p_error("cannot have -j with -r or -c", 0xff);
-
-	if ((test_flag(RALIGN)
-			&& (test_flag(CALIGN)
-			|| test_flag(LALIGN)))
-			|| (test_flag(CALIGN)
-			&& (test_flag(RALIGN)
-			|| test_flag(LALIGN))))
-		p_error("options -l, -r and -c are mutually exclusive", 0xff);
-
-	if (LENGTH && UNJUSTIFY)
-		unset_flag(UNJUSTIFY);
+	test_user_options();
 
 	if (check_file(argv[optind]) == -1)
-		p_error("main", EXIT_FAILURE);
+		goto fail;
+
+	if (strlen(argv[optind]) >= PATH_MAX)
+	{
+		fprintf(stderr, "main: path length exceeds PATH_MAX\n");
+		goto fail;
+	}
+
+	clear_struct(&file);
+	strcpy(file.filename, argv[optind]);
+
+	if (!(map_file(&file)))
+		goto fail;
+
+	/*
+	 * Remove 0x0d's, replace "-\n" with 0x20
+	 */
+	__normalise_file(&file);
 
 	clear();
 	fill();
@@ -305,1061 +598,1011 @@ main(int argc, char *argv[])
 	if (test_flag(LENGTH))
 	{
 		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_LENGTH);
-		debug("main: created thread", (int)TID_SP, NULL);
-		if (change_line_length(argv[optind]) == -1)
+		if (change_line_length(&file) == -1)
 			goto fail;
 	}
 
-	if (test_flag(JUSTIFY))
+	uint32_t		alignment = user_options & ALIGNMENT_MASK;
+	switch(alignment)
 	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_JUSTIFY);
-		debug("main: created thread", (int)TID_SP, NULL);
-		if (justify_text(argv[optind]) == -1)
-			goto fail;
-	}
-	
-	if (test_flag(UNJUSTIFY))
-	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_UNJUSTIFY);
-		debug("main: created thread", (int)TID_SP, NULL);
-		if (unjustify_text(argv[optind]) == -1)
-			goto fail;
-	}
-
-	if (test_flag(LALIGN))
-	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_LALIGN);
-		debug("main: created thread", (int)TID_SP, NULL);
-		if (left_align_text(argv[optind]) == -1)
-			goto fail;
-	}
-
-	if (test_flag(RALIGN))
-	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_RALIGN);
-		debug("main: created thread", (int)TID_SP, NULL);
-		if (right_align_text(argv[optind]) == -1)
-			goto fail;
+		case JUSTIFY:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_JUSTIFY);
+			if (justify_text(&file) == -1)
+				goto fail;
+			break;
+		case UNJUSTIFY:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_UNJUSTIFY);
+			if (unjustify_text(&file) == -1)
+				goto fail;
+			break;
+		case LALIGN:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_LALIGN);
+			if (left_align_text(&file) == -1)
+				goto fail;
+			break;
+		case RALIGN:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_RALIGN);
+			if (right_align_text(&file) == -1)
+				goto fail;
+			break;
+		case CALIGN:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_CALIGN);
+			if (centre_align_text(&file) == -1)
+				goto fail;
+			break;
 	}
 
-	if (test_flag(CALIGN))
-	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_CALIGN);
-		debug("main: created thread", (int)TID_SP, NULL);
-		if (centre_align_text(argv[optind]) == -1)
-			goto fail;
-	}
-
-	exit(0);
+	unmap_file(&file);
+	exit(EXIT_SUCCESS);
 
 	fail:
 	exit(EXIT_FAILURE);
 }
 
-ssize_t
+int
 check_file(char *filename)
 {
-	struct stat		STATB;
+	struct stat	statb;
 
-	lstat(filename, &STATB);
-	if (!S_ISREG(STATB.st_mode))
-		p_error("not regular file", -1);
-	if (access(filename, W_OK|R_OK) != 0)
-		p_error("no read/write permissions for file", -1);
-	return(0);
-}
-
-ssize_t
-change_line_length(char *filename)
-{
-	// pointers for manipulating lines in the file
-	char		*start = NULL;
-	char		*end = NULL;
-	char		*p = NULL;
-	//size_t	len;
-	//static char		*p1 = NULL;
-	char		line_buf[LINE_BUF_SIZE];
-	char		c;
-	int		fd_old, fd_new, char_cnt, i;//, max;
-	int		spaces;
-	void	*map = NULL;
-	char	*map_end = NULL;
-	struct stat statb;
-
-	reset_global();
-	open_map();
-
-	p = (char *)map;
-	map_end = ((char *)map + statb.st_size);
-	//len = statb.st_size;
-	i = 0;
-
-	// unjustify the text first (and automatically left-align)
-	start = p;
-	while (p < map_end)
+	if (access(filename, F_OK) != 0)
 	{
-		while ((*p == 0x20 || *p == 0x09) && p < map_end)
-			++p;
-
-		start = p;
-		while (*p != 0x0a && p < map_end)
-		{
-			if (*p == 0x20)
-			{
-				line_buf[i++] = *p++;
-				while (*p == 0x20 && p < map_end)
-					++p;
-			}
-			line_buf[i++] = *p++;
-		}
-		while (*p == 0x0a)
-			line_buf[i++] = *p++;
-
-		line_buf[i] = 0;
-		write(fd_new, line_buf, (size_t)i);
-		i = 0;
+		fprintf(stderr, "check_file: %s does not exist\n", filename);
+		goto fail;
+	}
+	else
+	if (access(filename, R_OK) != 0)
+	{
+		fprintf(stderr, "check_file: cannot read %s\n", filename);
+		goto fail;
+	}
+	else
+	if (access(filename, W_OK) != 0)
+	{
+		fprintf(stderr, "check_file: cannot write to %s\n", filename);
+		goto fail;
 	}
 
-	close_unmap();
-	reset_global();
-	open_map();
+	clear_struct(&statb);
+	lstat(filename, &statb);
 
-	p = (char *)map;
-	map_end = ((char *)map + statb.st_size);
-	//len = statb.st_size;
-
-	start = p;
-	while (p < map_end)
+	if (!S_ISREG(statb.st_mode))
 	{
-		__main_loop_length_start:
-
-		if (p == map_end)
-			break;
-
-		if (*p == 0x0a)
-		{
-			while (*p == 0x0a)
-			{
-				write(fd_new, p++, 1);
-				++global_data.done_lines;
-			}
-		}
-
-		while ((*p == 0x20 || *p == 0x09) && p < map_end)
-			++p;
-
-		start = p;
-		char_cnt = 0;
-
-		while (char_cnt < MAX_LENGTH && p < map_end)
-		{
-			++char_cnt;
-			++p;
-		}
-
-		/* deal with new line characters; conserve paragraph structure */
-		end = p;
-		p = start;
-		spaces = 0;
-
-		while (p < end)
-		{
-			if (*p == 0x0a && (*(p+1) == 0x0a || *(p-1) == 0x0a))
-			{
-				end = p;
-				while (*end == 0x0a && end < map_end)
-				{
-					++end;
-					++global_data.done_lines;
-				}
-
-				p = start;
-				i = 0;
-
-				while (p < end)
-					line_buf[i++] = *p++;
-
-				line_buf[i] = 0;
-				write(fd_new, line_buf, strlen(line_buf));
-				start = p;
-				goto __main_loop_length_start;
-			}
-			else
-			if (*p == 0x0a && (*(p+1) != 0x0a && *(p-1) != 0x0a))
-			{
-				*p = 0x20;
-				++global_data.done_lines;
-			}
-
-			if (*p == 0x20)
-				++spaces;
-
-			++p;
-		}
-
-		if (spaces == 0)
-		{
-			p = start;
-			i = 0;
-			while (p < end)
-				line_buf[i++] = *p++;
-			if (*p == 0x0a)
-				line_buf[i++] = *p++;
-			else
-			{
-				line_buf[i++] = 0x0a;
-			}
-			line_buf[i] = 0;
-			write(fd_new, line_buf, strlen(line_buf));
-			++global_data.done_lines;
-			start = p;
-			goto __main_loop_length_start;
-		}
-
-		/* If we're here, we found a range of MAX_LENGTH characters not including an entre-paragraph */
-		if (*p == 0x0a)
-		{
-			while (*end == 0x0a && end < map_end)
-			{
-				++end;
-				++global_data.done_lines;
-			}
-
-			write(fd_new, start, (end - start));
-			p = end;
-			start = p;
-		}
-		else
-		{
-			if (*p == 0x20)
-			{
-				write(fd_new, start, (end - start));
-				c = 0x0a;
-				write(fd_new, &c, 1);
-				++end;
-				p = end;
-				start = p;
-			}
-			else
-			{
-				/* we don't want the end of the line to be in the middle of a word,
-				 * so find the nearest space character going backwards
-				 */
-				while (*p != 0x20 && p > ((char *)map + 1))
-					--p;
-				end = p;
-				write(fd_new, start, (end - start));
-				c = 0x0a;
-				write(fd_new, &c, 1);
-				++end;
-				p = end;
-				start = p;
-			}
-		}
+		fprintf(stderr, "check_file: %s is not a regular file\n", filename);
+		goto fail;
 	}
 
-	//__end:
-	close_unmap();
-	pthread_join(TID_SP, NULL);
-	return(0);
-}
-
-ssize_t
-justify_text(char *filename)
-{
-	char			*p = NULL, *start = NULL, *end = NULL;
-	char			j_line[256];
-	int			char_cnt, fd_old, fd_new, i, j;
-	void			*map = NULL;
-	struct stat		statb;
-
-	reset_global();
-	open_map();
-	p = (char *)map;
-
-	char_cnt = 0;
-	if (!LENGTH) // find len of longest line and justify according to that
-	{
-		MAX_LENGTH = 0; // au cas où
-		while (p < (char *)(map + statb.st_size))
-		{
-			char_cnt = 0;
-			while (*p == 0x20 || *p == 0x09)
-				++p;
-			while (*p != 0x0a && p < (char *)(map + statb.st_size))
-			{
-				if (*p == 0x20)
-				{
-					if (*(p+1) == 0x20)
-					{
-						fprintf(stderr,
-						"Text already justified\r\n");
-						goto fail;
-					}
-				}
-				++p; ++char_cnt;
-			}
-			while (*p == 0x0a && p < (char *)(map + statb.st_size))
-				++p;
-			if (char_cnt > MAX_LENGTH)
-				MAX_LENGTH = char_cnt;
-		}
-		p = (char *)map;
-	}
-
-	start = p;
-	while (p < (char *)(map + statb.st_size))
-	{
-		__main_loop_justify_start:
-
-		if (p == (char *)(map + statb.st_size))
-			break;
-
-		if (*p == 0x0a)
-		{
-			while (*p == 0x0a)
-			{
-				write(fd_new, p++, 1);
-				++global_data.done_lines;
-			}
-		}
-
-		while (*p == 0x20 || *p == 0x09)
-			++p;
-
-		start = p; char_cnt &= ~char_cnt;
-		while (*p != 0x0a && p < (char *)(map + statb.st_size))
-		{
-			++p;
-			++char_cnt;
-		}
-
-		if (char_cnt > MAX_LENGTH)
-		{
-			fprintf(stderr, "counted more characters than are in the longest line\r\n"
-					"count %d: longest line %d\r\n",
-				char_cnt, MAX_LENGTH);
-			goto fail;
-		}
-
-
-	// now we have the line and we'll add more spaces if necessary
-
-		end = p;
-		while (*end == 0x0a && end < (char *)(map + statb.st_size))
-		{
-			++end;
-			++global_data.done_lines;
-		}
-
-		if (MAX_LENGTH < char_cnt)
-		{
-			fprintf(stderr,
-				"justify length specified too short (%d - length of line %d)\r\n",
-				MAX_LENGTH, char_cnt);
-			goto fail;
-		}
-		else if (MAX_LENGTH == char_cnt)
-		{
-			write(fd_new, start, (end - start));
-			p = end; start = p;
-		}
-		else if ((MAX_LENGTH - char_cnt) > 15)
-		{
-			write(fd_new, start, (end - start));
-			p = end; start = p;
-		}
-		else
-		{
-			int				delta, spaces, remainder;
-			char			*lim1 = NULL;
-			char			*lim2 = NULL;
-			char			*l_end = NULL;
-			char			*l = NULL;
-			char			*l2 = NULL;
-
-			spaces &= ~spaces;
-			delta &= ~delta;
-			remainder &= ~remainder;
-
-			p = start;
-			while (p < end)
-			{
-				if (*p == 0x20)
-				{
-					++spaces;
-					while (*p == 0x20)
-						++p;
-				}
-				++p;
-			}
-
-			if (spaces == 0)
-			{
-				write(fd_new, start, (end - start));
-				p = end; start = p;
-				goto __main_loop_justify_start;
-			}
-
-			delta = (MAX_LENGTH - char_cnt);
-			remainder = (delta % spaces);
-
-			p = start; i &= ~i;
-			while (p < end)
-			{
-				if (*p == 0x20)
-				{
-					j_line[i++] = *p++;
-					for (j = 0; j < (delta/spaces); ++j)
-						j_line[i++] = 0x20;
-				}
-				j_line[i++] = *p++;
-			}
-
-			j_line[i] = 0;
-			
-			if (remainder != 0)
-			{
-				l_end = j_line;
-				while (*l_end != 0)
-					++l_end;
-
-				if (*(l_end-2) == 0x20)
-				{
-					l_end -= 2;
-					remainder += 2;
-					while (*l_end == 0x20 && l_end > j_line)
-					{ --l_end; ++remainder; }
-					++l_end;
-					--remainder;
-					*l_end++ = 0x0a;
-					--remainder;
-					*l_end = 0;
-				}
-
-				lim2 = l_end;
-				lim1 = j_line;
-
-				while (remainder != 0 && remainder > -1)
-				{
-					l = lim1;
-					while (*l != 0x20)
-						++l;
-					l2 = l;
-					l = l_end;
-					while (l > l2)
-					{
-						*l = *(l-1);
-						--l;
-					}
-					while (*l2 == 0x20 && l2 < l_end)
-						++l2;
-					if (l2 == l_end)
-					{
-						if (remainder > 0)
-							lim1 = l2 = j_line;
-						else
-							break;
-					}
-					lim1 = l2;
-
-					++l_end;
-					*l_end = 0;
-
-					--remainder;
-					if (remainder == 0 || remainder < 0)
-						break;
-
-					l = lim2;
-					while (*l != 0x20)
-						--l;
-					l2 = l;
-					l = l_end;
-					while (l > l2)
-					{
-						*l = *(l-1);
-						--l;
-					}
-					while (*l2 == 0x20 && l2 > j_line)
-						--l2;
-					if (l2 == j_line)
-					{
-						if (remainder > 0)
-							lim2 = l2 = l_end;
-						else
-							break;
-					}
-					lim2 = l2;
-
-					++l_end;
-					*l_end = 0;
-
-					--remainder;
-					if (remainder == 0 || remainder < 0)
-						break;
-				}
-			}
-
-			write(fd_new, j_line, strlen(j_line));
-			p = end; start = p;
-		}
-	}
-
-	//__end:
-	close_unmap();
-	++global_data.done_lines;
-	pthread_join(TID_SP, NULL);
-	return(0);
+	return 0;
 
 	fail:
-	pthread_kill(TID_SP, SIGINT);
-	if (mlock(map, statb.st_size) < 0)
-	{
-		fprintf(stderr,
-		"failed to unlock memory region (%p to %p): %s (line %d)\r\n",
-		map, (map + (statb.st_size - 1)), strerror(errno), __LINE__);
-	}
-	if (munmap(map, statb.st_size) < 0)
-	{
-		fprintf(stderr,
-		"failed to unmap \"%s\": %s (line %d)\r\n",
-		filename, strerror(errno), __LINE__);
-		
-	}
-	debug("justify_text: fail: unmapped file from memory", 0, NULL);
-	close(fd_new);
-	unlink(output);
-	debug("justify_text: fail: unlinked output file", 0, filename);
-	close(fd_old);
-
 	return -1;
 }
 
 ssize_t
-unjustify_text(char *filename)
+change_line_length(mapped_file_t *file)
 {
-	int		fd_old, fd_new, i;
-	void		*map = NULL;
-	struct stat	statb;
-	char		*p = NULL;// *start = NULL, *end = NULL;
-	char		line_buf[256];
+	assert(file);
 
-	global_data.total_lines &= ~global_data.total_lines;
-	global_data.done_lines &= ~global_data.done_lines;
+	char	*p = (char *)file->startp;
+	char	*save_p = (char *)file->startp;
+	char	*startp = (char *)file->startp;
+	char	*endp = (char *)file->endp;
 
-	global_data.total_lines = do_line_count(filename);
+	/*
+	 * Pointers to the current line
+	 * we are dealing with.
+	 */
+	char	*line_start = NULL;
+	char	*line_end = NULL;
+	size_t	range;
 
-	memset(&statb, 0, sizeof(statb));
-	if (lstat(filename, &statb) < 0)
-		p_error("unjustify_text: lstat error", -1);
-	if ((fd_old = open(filename, OLD_FILE_FLAGS)) < 0)
-		p_error("unjustify_text: error opening input file", -1);
-	if ((map = mmap(NULL, statb.st_size, OLD_FILE_PROT, OLD_FILE_MAP, fd_old, 0)) == MAP_FAILED)
-		p_error("unjustify_text: error mapping file into memory", -1);
-	close(fd_old);
-	if ((fd_new = open(output, CREATION_FLAGS, CREATION_MASK)) < 0)
-		p_error("unjustify_text: error creating output file", -1);
+	reset_global();
+	global_data.total_lines = __do_line_count(file);
 
-	p = (char *)map;
+	/*
+	 * Left-align the text first.
+	 */
 
-	while ((void *)p < (map + statb.st_size))
+	while (p < endp)
 	{
-		i = 0;
-		while ((*p == 0x20 || *p == 0x09) && (void *)p < (map + statb.st_size))
-			++p;
-		//start = p;
-		while (*p != 0x0a && (void *)p < (map + statb.st_size))
+		if (*p == 0x20 || *p == 0x09)
+		{
+			save_p = p;
+			while ((*p == 0x20 || *p == 0x09) && p < endp)
+				++p;
+
+			range = (p - save_p);
+
+			if (range)
+			{
+				__collapse_file(file, (off_t)(save_p - startp), range);
+				p = save_p;
+				endp -= range;
+				range = 0;
+			}
+		}
+
+		while (*p != 0x0a && p < endp)
 		{
 			if (*p == 0x20)
 			{
-				line_buf[i++] = *p++;
-				while (*p == 0x20)
+				++p;
+
+				save_p = p;
+				while (*p == 0x20 && p < endp)
 					++p;
-			}
-			line_buf[i++] = *p++;
-		}
-		while (*p == 0x0a && (void *)p < (map + statb.st_size))
-		{
-			line_buf[i++] = *p++;
-			++global_data.done_lines;
-		}
-		line_buf[i] = 0;
-		write(fd_new, line_buf, strlen(line_buf));
-		if (((map + statb.st_size) - (void *)p) <= MAX_LENGTH)
-		{
-			i = 0;
-			while ((void *)p < (map + statb.st_size))
-				line_buf[i++] = *p++;
-			line_buf[i] = 0;
-			write(fd_new, line_buf, strlen(line_buf));
-			++global_data.done_lines;
-			break;
-		}
-	}
 
-	munmap(map, statb.st_size);
-	unlink(filename);
-	rename(output, filename);
-	return(0);
-}
+				range = (p - save_p);
 
-ssize_t
-left_align_text(char *filename)
-{
-	char		*p = NULL, *start = NULL, *end = NULL;
-	char		line_buf[LINE_BUF_SIZE];//, c;
-	int		fd_old, fd_new, i;//, j;
-	void		*map = NULL;
-	struct stat	statb;
+				if (range)
+				{
+					__collapse_file(file, (off_t)(save_p - startp), range);
+					p = save_p;
+					endp -= range;
+					range = 0;
+				}
 
-	
-	reset_global();
-	open_map();
-
-	p = (char *)map;
-
-	while (p < (char *)(map + statb.st_size))
-	{
-		if (*p == 0x0a)
-			while (*p == 0x0a)
-			{
-				write(fd_new, p++, 1);
-				++global_data.done_lines;
+				continue;
 			}
 
-		start = p;
-		while ((*p == 0x20 || *p == 0x09) && p < (char *)(map + statb.st_size))
 			++p;
-
-		if (p == (char *)(map + statb.st_size))
-		{
-			i = 0;
-			end = p;
-			p = start;
-
-			while (p < end)
-			{
-				if (*p == 0x20)
-				{
-					line_buf[i++] = *p++;
-					while (*p == 0x20)
-						++p;
-				}
-				line_buf[i++] = *p++;
-			}
-
-			line_buf[i] = 0;
-
-			if (i > 0)
-			{
-				write(fd_new, line_buf, (size_t)i);
-				++global_data.done_lines;
-			}
-			break;
 		}
 
-		start = p;
-		i = 0;
-		while (*p != 0x0a && p < (char *)(map + statb.st_size))
-		{
-			if (*p == 0x20)
-			{
-				line_buf[i++] = *p++;
-				while (*p == 0x20)
-					++p;
-			}
-
-			line_buf[i++] = *p++;
-		}
-
-		if (p == (char *)(map + statb.st_size))
-		{
-			line_buf[i] = 0;
-			write(fd_new, line_buf, (size_t)i);
-			++global_data.done_lines;
-			break;
-		}
-
-
-		end = p;
-		while (*end == 0x0a)
-		{
-			line_buf[i++] = *end++;
-			++global_data.done_lines;
-		}
-
-		line_buf[i] = 0;
-		write(fd_new, line_buf, (size_t)i);
-
-		p = end; start = p;
+		while (*p == 0x0a && p < endp)
+			++p;
 	}
 
-	close_unmap();
-	return(0);
-}
-
-ssize_t
-right_align_text(char *filename)
-{
-	char		*p = NULL, *start = NULL, *end = NULL, *end2 = NULL, c;
-	char		line_buf[LINE_BUF_SIZE];
-	int		i, fd_old, fd_new, delta, char_cnt;//,j;
-	void		*map = NULL;
-	struct stat	statb;
-
 	reset_global();
-	open_map();
-	p = (char *)map;
 
-	if (!LENGTH) // then find # chars in longest line
+	p = line_start = startp;
+
+	/*
+	 * We want to preserve paragraph structure, so if
+	 * we encounter two or more consecutive new lines,
+	 * we just skip them and then start a new line
+	 * from there.
+	 */
+	while (p < endp)
 	{
-		while (p < ((char *)map + statb.st_size))
+		__begin_next_line:
+
+		line_end = (p + MAX_LENGTH);
+
+		if (line_end >= endp)
 		{
-			if (*p == 0x0a)
-				while (*p == 0x0a)
-					++p;
+			while (line_end > endp)
+				--line_end;
+		}
 
-			while (*p == 0x20 || *p == 0x09)
-				++p;
+		line_start = p;
 
-			start = p;
-			char_cnt = 0;
+		if (*line_end != 0x0a && *line_end != 0x20)
+		{
+			while (*line_end != 0x20 && *line_end != 0x0a && line_end > (line_start+1))
+				--line_end;
 
-			while (*p != 0x0a && p < ((char *)map + statb.st_size))
+			if (unlikely(line_end == line_start))
 			{
-				if (*p == 0x20)
+				line_end = (line_start + MAX_LENGTH);
+				if (line_end >= endp)
 				{
-					++char_cnt;
-					while (*p == 0x20)
-						++p;
-					continue;
+					while (line_end > endp)	
+						--line_end;
 				}
-
-				++char_cnt;
-				++p;
 			}
+		}
 
-			if (p == ((char *)map + statb.st_size))
+		/*
+		 * If we happen upon a new line character, then replace
+		 * it with a space. If we happen upon 2+ new line characters,
+		 * then we preserve them as we want to keep the correct
+		 * paragraph structure of the file.
+		 */
+		while (p < line_end)
+		{
+			if (*p == 0x0a && (p+1) == endp)
 			{
-				if (char_cnt > MAX_LENGTH)
-					MAX_LENGTH = char_cnt;
-
+				++global_data.done_lines;
 				break;
 			}
+			else
+			if (*p == 0x0a && *(p+1) != 0x0a)
+			{
+				*p++ = 0x20;
+				++global_data.done_lines;
+			}
+			else
+			if (*p == 0x0a && *(p+1) == 0x0a)
+			{
+				while (*p == 0x0a)
+				{
+					++p;
+					++global_data.done_lines;
+				}
 
-			end = p;
-			++end;
-
-			while (*end == 0x0a)
-				++end;
-
-			if (char_cnt > MAX_LENGTH)
-				MAX_LENGTH = char_cnt;
-
-			p = end;
-			start = p;
+				line_end = line_start = p;
+				goto __begin_next_line;
+			}
+			else
+			{
+				++p;
+			}
 		}
-		p = (char *)map;
+
+		if (p >= endp)
+		{
+			/*
+			 * If the file didn't end with 0x0a, then we will have
+			 * counted (#lines - 1) in __do_line_count(), so don't
+			 * bother incrementing GLOBAL_DATA.DONE_LINES here.
+			 */
+			break;
+		}
+		else
+		{
+			if (likely(*p == 0x20))
+			{
+				*p++ = 0x0a;
+			}
+			else
+			if (*p == 0x0a)
+			{
+				/*
+				 * There can only be one, otherwise we would have
+				 * skipped them and restarted the loop above.
+				 */
+				++p;
+				++global_data.done_lines;
+			}
+			else
+			if (*p != 0x20)
+			{
+				/*
+				 * Then we have a line with no whitespace. P and LINE_END
+				 * are pointing to one byte beyond the maximum number of
+				 * bytes per line.
+				 *
+				 * Policy at this point in time for such a scenario:
+				 *
+				 * Point P at LINE_START + MAX_LEN-1;
+				 * Shift data by 2 bytes;
+				 * Add "-\n", thus breaking the word with a hyphen.
+				 */
+
+				p = (line_start + MAX_LENGTH - 1);
+				size_t		shift;
+
+				if (unlikely(*p == 0x2d))
+				{
+					shift = 1;
+					++p;
+				}
+				else
+				if (unlikely(*(p-1) == 0x2d))
+				{
+					shift = 1;
+				}
+				else
+				{
+					shift = 2;
+				}
+
+				if (!__extend_file_and_map(file, shift))
+					goto fail;
+
+				endp += shift;
+
+				__shift_file_data(file, (off_t)(p - startp), shift);
+
+				if (likely(shift == 2))
+					strncpy(p, "-\n", 2);
+				else
+					*p = 0x0a;
+
+				p += shift;
+
+				line_end = line_start = p;
+			}
+		}
+
+		line_end = line_start = p;
 	}
 
-	while (p < ((char *)map + statb.st_size))
+	pthread_join(TID_SP, NULL);
+	return 0;
+
+	fail:
+	return -1;
+}
+
+ssize_t
+justify_text(mapped_file_t *file)
+{
+	assert(file);
+
+	char	*p = (char *)file->startp;
+	char	*startp = (char *)file->startp;
+	char	*endp = (char *)file->endp;
+	char	*line_start = NULL;
+	char	*line_end = NULL;
+	char	*save_p = NULL;
+	int		char_cnt = 0;
+	int		delta;
+	int		holes;
+	int		quotient;
+	int		remainder;
+	size_t	range;
+
+	reset_global();
+	global_data.total_lines = __do_line_count(file);
+	char_cnt = 0;
+
+	/*
+	 * If user did not specify a new line length, then
+	 * determine the longest line in the file, and
+	 * then justify the text accordingly.
+	 */
+#ifdef DEBUG
+	printf("before: MAX_LENGTH=%d\n", MAX_LENGTH);
+#endif
+	if (!test_flag(LENGTH))
+		MAX_LENGTH = __do_line_count(file);
+
+#ifdef DEBUG
+	printf("MAX_LENGTH=%d\n", MAX_LENGTH);
+#endif
+
+	while (p < endp)
 	{
-		if (*p == 0x0a)
-			while (*p == 0x0a)
-				{ write(fd_new, p++, 1); ++global_data.done_lines; }
+		__main_loop_justify_start:
 
-		while (*p == 0x20 || *p == 0x09)
-			++p;
+		if (*p == 0x20 || *p == 0x09)
+		{
+			save_p = p;
+			while (*p == 0x20 || *p == 0x09)
+				++p;
 
-		start = p;
+			range = (p - save_p);
+
+			if (range)
+			{
+				__collapse_file(file, (off_t)(save_p - startp), range);
+				p = save_p;
+				endp -= range;
+				range = 0;
+			}
+		}
+
+		line_start = p;
 		char_cnt = 0;
 
-		while (*p != 0x0a && p < ((char *)map + statb.st_size))
+		while (*p != 0x0a && p < endp)
 		{
 			if (*p == 0x20)
 			{
+				++p;
 				++char_cnt;
-				while (*p == 0x20)
+
+				save_p = p;
+				while (*p == 0x20 && p < endp)
 					++p;
-				continue;
+
+				range = (p - save_p);
+
+				if (range)
+				{
+					__collapse_file(file, (off_t)(save_p - startp), range);
+					endp -= range;
+					p = save_p;
+					range = 0;
+				}
+			}
+			else
+			{
+				++p;
+				++char_cnt;
+			}
+		}
+
+		line_end = p;
+
+		if (line_end == endp && *(line_end-1) == 0x0a)
+			++global_data.done_lines;
+		else
+		{
+			while (*line_end == 0x0a)
+			{
+				++line_end;
+				++global_data.done_lines;
+			}
+		}
+
+		if (MAX_LENGTH == char_cnt)
+		{
+			/*
+			 * Then there's nothing to be done.
+			 */
+			p = line_start = line_end;
+			continue;
+		}
+		else
+		{
+			delta = holes = quotient = remainder = 0;
+
+			p = line_start;
+
+			/*
+			 * calculate (#words - 1).
+			 */
+			while (p < line_end)
+			{
+				if (*p == 0x20)
+				{
+					++holes;
+					while (*p == 0x20)
+						++p;
+
+					continue;
+				}
+				++p;
 			}
 
-			++char_cnt;
+			/*
+			 * Then we can't justify it (adding
+			 * spaces to the end of the line makes
+			 * no difference visually).
+			 */
+			if (holes == 0)
+			{
+				p = line_start = line_end;
+				goto __main_loop_justify_start;
+			}
+
+			delta = (MAX_LENGTH - char_cnt);
+			quotient = (delta / holes);
+			remainder = (delta % holes);
+
+			p = line_start;
+
+			/*
+			 * ^An example line in the file which is shorter than the max$
+			 * ^__________________________________________________________--------------$ max length
+			 *                                                                 delta
+			 *
+			 * We need to add DELTA spaces to the line to justify it. With the number
+			 * of holes in the current line known, we need to go over the line
+			 * DELTA / HOLES times, adding an additional space between each word
+			 * in the line. If (DELTA % HOLES), then must also spread that number of
+			 * additional spaces across the current line.
+			 */
+
+
+			/*
+			 * Extend vma by DELTA bytes to allow for the added spaces.
+			 */
+			if (!__extend_file_and_map(file, (off_t)delta))
+				goto fail;
+
+			endp += delta;
+
+			/*
+			 * Loop until we have passed over the line QUOTIENT times,
+			 * adding one additional space to each word separation,
+			 * thus spreading out (DELTA - REMAINDER) spaces.
+			 */
+			while (quotient)
+			{
+				if (!p || p == line_end)
+				{
+					p = line_start;
+					--quotient;
+					continue;
+				}
+
+				save_p = p;
+				p = memchr(save_p, 0x20, (line_end - save_p));
+
+				if (!p)
+					continue;
+
+				__shift_file_data(file, (off_t)(p - startp), (size_t)1);
+				++line_end;
+
+				*p++ = 0x20;
+
+				while (*p == 0x20 && p < line_end)
+					++p;
+			}
+
+
+			/*
+			 * Go from start -> space, add space; go from end -> space, add space
+			 * until REMAINDER spaces have been added to the line.
+			 */
+			int	_switch = 0;
+			if (remainder)
+			{
+				p = line_start;
+
+				while (remainder--)
+				{
+					if (*p == 0x20)
+					{
+						if (!__extend_file_and_map(file, (off_t)1))
+							goto fail;
+
+						++endp;
+
+						__shift_file_data(file, (off_t)(p - startp), (size_t)1);
+						++line_end;
+
+						*p++ = 0x20;
+
+						if (!_switch)
+						{
+							p = (line_end - 1);
+							_switch = 1;
+						}
+						else
+						{
+							p = line_start;
+							_switch = 0;
+						}
+					}
+
+					!_switch ? ++p : --p;
+				}
+			}
+
+			p = line_start = line_end;
+
+		} // else (MAX_COUNT != char_cnt)
+	} // while (p < endp)
+
+
+	++global_data.done_lines;
+	pthread_join(TID_SP, NULL);
+	return 0;
+
+	fail:
+	pthread_kill(TID_SP, SIGINT);
+	return -1;
+}
+
+ssize_t
+unjustify_text(mapped_file_t *file)
+{
+	assert(file);
+
+	char	*p = (char *)file->startp;
+	char	*startp = (char *)file->startp;
+	char	*endp = (char *)file->endp;
+	char	*save_p = NULL;
+	size_t range;
+
+	reset_global();
+	global_data.total_lines = __do_line_count(file);
+
+	while (p < endp)
+	{
+		save_p = p;
+		while ((*p == 0x20 || *p == 0x09) && p < endp)
+			++p;
+
+		range = (p - save_p);
+
+		if (range)
+		{
+			__collapse_file(file, (off_t)(save_p - startp), range);
+			endp -= range;
+			p = save_p;
+			range = 0;
+		}
+
+		while (*p != 0x0a && p < endp)
+		{
+			if (*p == 0x20)
+			{
+				++p;
+				save_p = p;
+				while (*p == 0x20)
+					++p;
+
+				range = (p - save_p);
+
+				if (range)
+				{
+					__collapse_file(file, (off_t)(save_p - startp), range);
+					endp -= range;
+					p = save_p;
+					range = 0;
+				}
+			}
+
 			++p;
 		}
 
-		if (p == ((char *)map + statb.st_size))
+		while (*p == 0x0a && p < endp)
 		{
-	 		end2 = p;
-			--p;
+			++p;
+			++global_data.done_lines;
+		}
+	}
 
-			while (*p == 0x20 || *p == 0x09)
+	return 0;
+}
+
+ssize_t
+left_align_text(mapped_file_t *file)
+{
+	assert(file);
+
+	char		*p = (char *)file->startp;
+	char		*startp = (char *)file->startp;
+	char		*endp = (char *)file->endp;
+	char		*save_p = NULL;
+	char		*line_start = NULL;
+	char		*line_end = NULL;
+	size_t	range;
+
+	reset_global();
+	global_data.total_lines = __do_line_count(file);
+
+	while (p < endp)
+	{
+		while (*p == 0x0a)
+		{
+			++p;
+			++global_data.done_lines;
+		}
+
+		line_start = p;
+		while ((*p == 0x20 || *p == 0x09) && p < endp)
+			++p;
+
+		range = (p - line_start);
+
+		if (range)
+		{
+			__collapse_file(file, (off_t)(line_start - startp), range);
+			endp -= range;
+			p = line_start;
+		}
+
+		if (p == endp)
+		{
+			line_end = p;
+			p = line_start;
+
+			while (p < line_end)
 			{
-				--p;
-				--char_cnt;
-			}
-
-			end = p;
-			++end;
-			delta = (MAX_LENGTH - char_cnt);
-			i = 0;
-			c = 0x20;
-
-			while (i < delta)
-			{
-				write(fd_new, &c, 1);
-				++i;
-			}
-
-			i = 0;
-			p = start;
-
-			while (p < end)
-			{
-				if (*p == 0x20)	
+				if (*p == 0x20)
 				{
-					line_buf[i++] = *p++;
+					++p;
+					save_p = p;
 					while (*p == 0x20)
 						++p;
+
+					range = (p - save_p);
+
+					if (range)
+					{
+						__collapse_file(file, (off_t)(save_p - startp), range);
+						endp -= range;
+						p = save_p;
+						range = 0;
+					}
 				}
-				line_buf[i++] = *p++;
+
+				++p;
 			}
 
-			line_buf[i] = 0;
-			write(fd_new, line_buf, (size_t)i);
 			++global_data.done_lines;
 			break;
 		}
 
-		end2 = p;
-		--p;
-
-		while (*p == 0x20 || *p == 0x09)
-		{
-			--p;
-			--char_cnt;
-		}
-
-		end = p;
-		++end;
-		p = start;
-
-		delta = (MAX_LENGTH - char_cnt);
-
-		i = 0;
-		c = 0x20;
-
-		while (i < delta)
-		{
-			write(fd_new, &c, 1);
-			++i;
-		}
-
-		i = 0;
-		p = start;
-
-		while (p < end)
+		while (*p != 0x0a && p < endp)
 		{
 			if (*p == 0x20)
 			{
-				line_buf[i++] = *p++;
+				++p;
+
+				save_p = p;
 				while (*p == 0x20)
 					++p;
+
+				range = (p - save_p);
+
+				if (range)
+				{
+					__collapse_file(file, (off_t)(save_p - startp), range);
+					endp -= range;
+					p = save_p;
+					range = 0;
+				}
 			}
-			line_buf[i++] = *p++;
+
+			++p;
 		}
 
-		while (*end2 == 0x0a)
+		if (p == endp)
 		{
-			line_buf[i++] = *end2++;
+			++global_data.done_lines;
+			break;
+		}
+
+
+		line_end = p;
+		while (*line_end == 0x0a)
+		{
+			++line_end;
 			++global_data.done_lines;
 		}
 
-		line_buf[i] = 0;
-		write(fd_new, line_buf, (size_t)i);
-
-		p = end2;
-		start = p;
-		end = p;
+		line_start = p = line_end;
 	}
 
-	close_unmap();
-	return(0);
+	return 0;
 }
 
 ssize_t
-centre_align_text(char *filename)
+right_align_text(mapped_file_t *file)
 {
-	char		*p = NULL;
-	char		*start = NULL;
-	char		*end = NULL;
-	char		*end2 = NULL;
-	char		c;
-	int			fd_old;
-	int			fd_new;
-	int			i;
-	int			char_cnt;
+	assert(file);
+
+	char		*p = (char *)file->startp;
+	char		*startp = (char *)file->startp;
+	char		*endp = (char *)file->endp;
+	char		*save_p = NULL;
+	char		*line_start = NULL;
+	char		*line_end = NULL;
+	size_t	range;
 	int			delta;
-	void		*map = NULL;
-	char		*map_end = NULL;
-	struct stat	statb;
+	int			char_cnt = 0;
 
 	reset_global();
-	open_map();
-
-	map_end = ((char *)map + statb.st_size);
-
-	p = (char *)map;
+	global_data.total_lines = __do_line_count(file);
 
 	if (!test_flag(LENGTH))
+		MAX_LENGTH = __get_length_longest_line(file);
+		
+	while (p < endp)
 	{
-		MAX_LENGTH = 0;
-		while (p < map_end)
+		while (*p == 0x0a)
 		{
-			char_cnt = 0;
-
-			while (*p != 0x0a)
-			{
-				if (*p == 0x20)
-				{
-					++char_cnt;
-					while (*p == 0x20)
-						++p;
-					continue;
-				}
-
-				++char_cnt;
-				++p;
-			}
-
-			if (char_cnt > MAX_LENGTH)
-				MAX_LENGTH = char_cnt;
-
-			while (*p == 0x0a)
-				++p;
-		}
-		p = (char *)map;
-	}
-
-	start = p;
-	while (p < map_end)
-	{
-		if (*p == 0x0a)
-		{
-			while (*p == 0x0a)
-			{
-				write(fd_new, p, 1);
-				++global_data.done_lines;
-				++p;
-			}
+			++p;
+			++global_data.done_lines;
 		}
 
+		save_p = p;
 		while (*p == 0x20 || *p == 0x09)
 			++p;
 
-		start = p;
+		range = (p - save_p);
 
+		if (range)
+		{
+			__collapse_file(file, (off_t)(save_p - startp), range);
+			endp -= range;
+			p = save_p;
+			range = 0;
+		}
+
+		line_start = p;
 		char_cnt = 0;
-		while (*p != 0x0a && p < map_end)
+
+		while (*p != 0x0a && p < endp)
 		{
 			if (*p == 0x20)
 			{
+				++p;
 				++char_cnt;
+
+				save_p = p;
 				while (*p == 0x20)
 					++p;
-				continue;
-			}
 
-			++char_cnt;
-			++p;
+				range = (p - save_p);
+
+				if (range)
+				{
+					__collapse_file(file, (off_t)(save_p - startp), range);
+					endp -= range;
+					p = save_p;
+					range = 0;
+				}
+			}
+			else
+			{
+				++char_cnt;
+				++p;
+			}
 		}
 
-		end2 = p; // point to new line char
+		line_end = p;
+
+		while (*line_end == 0x0a)
+		{
+			++line_end;
+			++global_data.done_lines;
+		}
+
+		line_end = p;
 
 		--p;
 		while (*p == 0x20 || *p == 0x09)
 			--p;
 
-		end = p;
-		++end;
+		++p;
+
+		range = (line_end - p);
+
+		if (range)
+		{
+			__collapse_file(file, (off_t)(p - startp), range);
+			endp -= range;
+			char_cnt -= (int)range;
+			range = 0;
+		}
+
+		/*
+		 * Already incremented GLOBAL_DATA.DONE_LINES
+		 */
+		while (*line_end == 0x0a)
+			++line_end;
+
+		if (MAX_LENGTH == char_cnt)
+		{
+			p = line_start = line_end;
+			continue;
+		}
 
 		delta = (MAX_LENGTH - char_cnt);
 
-		i = 0;
-		c = 0x20;
+		if (!__extend_file_and_map(file, (size_t)delta))
+			goto fail;
 
-		double half_delta = delta / 2;
+		__shift_file_data(file, (off_t)(line_start - startp), (off_t)delta);
 
-		while (i < half_delta)
-		{
-			write(fd_new, &c, 1);
-			++i;
-		}
+		p = line_start;
 
-		//line_buf[i++] = 0x20;
+		while (delta--)
+			*p++ = 0x20;
 
-		p = start;
-		write(fd_new, p, (end-p));
-
-		//line_buf[i++] = *p++;
-
-		while (*end2 == 0x0a)
-		{
-			write(fd_new, end2, 1);
-			//line_buf[i++] = *end2++;
-			++global_data.done_lines;
-			++end2;
-		}
-
-		p = end2;
-		start = p;
-		end = p;
+		p = line_start = line_end;
 	}
 
-	close_unmap();
-	return(0);
+	return 0;
+
+	fail:
+	pthread_kill(TID_SP, SIGINT);
+	return -1;
 }
 
-int
-do_line_count(char *filename)
+// __HERE
+ssize_t
+centre_align_text(mapped_file_t *file)
 {
-	int			fd, count;
-	void		*map = NULL;
-	char		*map_end = NULL;
-	struct	stat	statb;
-	char		*p = NULL;
+	assert(file);
 
-	debug("do_line_count: opening file", 0, filename);
+	char	*p = (char *)file->startp;
+	char	*startp = (char *)file->startp;
+	char	*endp = (char *)file->endp;
+	char	*line_start = NULL;
+	char	*line_end = NULL;
+	char	*save_p = NULL;
+	int		char_cnt;
+	int		delta;
+	int		half_delta;
+	size_t	range;
 
-	clear_struct(&statb);
+	reset_global();
+	global_data.total_lines = __do_line_count(file);
 
-	if (lstat(filename, &statb) < 0)
-		p_error("do_line_count: lstat error", -1);
-	if ((fd = open(filename, O_RDONLY)) < 0)
-		p_error("do_line_count: error opening file", -1);
-	if ((map = mmap(NULL, statb.st_size, PROT_READ, MAP_SHARED, fd, 0)) == MAP_FAILED)
-		p_error("do_line_count: error mapping file into memory", -1);
-	if (mlock(map, statb.st_size) < 0)
-		p_error("do_line_count: error locking mapped memory", -1);
-	close(fd);
+	if (!test_flag(LENGTH))
+		MAX_LENGTH = __get_length_longest_line(file);
 
-	count = 0;
-	p = (char *)map;
-	map_end = ((char *)map + statb.st_size);
-
-	while (p < map_end)
+	while (p < endp)
 	{
-		if (*p == 0x0a)
-			++count;
+		if (*p == 0x20 || *p == 0x09)
+		{
+			save_p = p;
+			while (*p == 0x20 || *p == 0x09)
+				++p;
+
+			range = (p - save_p);
+
+			if (range)
+			{
+				__collapse_file(file, (off_t)(save_p - startp), range);
+				endp -= range;
+				p = save_p;
+				range = 0;
+			}
+		}
+
+		line_start = p;
+		char_cnt = 0;
+
+		while (*p != 0x0a && p < endp)
+		{
+			if (*p == 0x20)
+			{
+				++p;
+				++char_cnt;
+
+				save_p = p;
+				while (*p == 0x20)
+					++p;
+
+				range = (p - save_p);
+
+				if (range)
+				{
+					__collapse_file(file, (off_t)(save_p - startp), range);
+					endp -= range;
+					p = save_p;
+					range = 0;
+				}
+			}
+			else
+			{
+				++char_cnt;
+				++p;
+			}
+		}
+
+		delta = (MAX_LENGTH - char_cnt);
+
+		if (!__extend_file_and_map(file, (size_t)delta))
+			goto fail;
+
+		endp += delta;
+
+		line_end = p;
+		p = line_start;
+
+		half_delta = ((delta / 2) + (delta % 2));
+
+		__shift_file_data(file, (off_t)(p - startp), (size_t)half_delta);
+		line_end += half_delta;
+
+		while (half_delta--)
+			*p++ = 0x20;
+
+		p = (line_end - 1);
+		while (*p == 0x20 || *p == 0x09)
+			--p;
 
 		++p;
+
+		range = (line_end - p);
+		half_delta = (delta - half_delta);
+
+		if (range)
+			half_delta -= (int)range;
+
+		p = line_end;
+
+		__shift_file_data(file, (off_t)(p - startp), (off_t)half_delta);
+		line_end += half_delta;
+
+		while (half_delta--)
+			*p++ = 0x20;
+
+		while (*line_end == 0x0a && line_end < endp)
+		{
+			++line_end;
+			++global_data.done_lines;
+		}
+
+		p = line_start = line_end;
 	}
 
-	if (munlock(map, statb.st_size) < 0)
-		p_error("do_line_count: error unlocking mapped memory", -1);
+	return 0;
 
-	munmap(map, statb.st_size);
-	return count;
+	fail:
+	pthread_kill(TID_SP, SIGINT);
+	return -1;
 }
 
 // screen-drawing functions
@@ -1586,7 +1829,7 @@ print_fileinfo(char *filename)
 	struct tm		*TIME = NULL;
 	mode_t			mode;
 
-	memset(&statb, 0, sizeof(statb));
+	clear_struct(&statb);
 	lstat(filename, &statb);
 	fill_line(FILE_STATS_COLOUR);
 	printf("%s", FILE_STATS_COLOUR);
@@ -1594,9 +1837,9 @@ print_fileinfo(char *filename)
 	--POSITION;
 	fill_line(FILE_STATS_COLOUR);
 	printf("%s", FILE_STATS_COLOUR);
-	TIME = gmtime(&statb.st_ctime);
+	TIME = gmtime(&statb.st_mtime);
 	strftime(buffer, 40, "%A %d %B %Y at %T %Z", TIME);
-	printf("%22s %s\r\n", "CREATED", buffer);
+	printf("%22s %s\r\n", "MODIFIED", buffer);
 	--POSITION;
 	fill_line(FILE_STATS_COLOUR);
 	printf("%s", FILE_STATS_COLOUR);
@@ -1657,7 +1900,7 @@ print_fileinfo(char *filename)
 }
 
 void
-usage(void)
+usage(int exit_status)
 {
 	fprintf(stdout,
 
@@ -1691,5 +1934,6 @@ usage(void)
 		"change_line_length -u /home/Documents/My_Document.txt\r\n"
 		"	Unjustifies  \"My_Document.txt\",  which will, by default,  be  left-aligned.\r\n"
 		"\r\n");
-	exit(0);
+
+	exit(exit_status);
 }
