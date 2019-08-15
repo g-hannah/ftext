@@ -1,4 +1,5 @@
 .*
 !.gitignore
 *.txt
+*.o
 ftext
