@@ -12,7 +12,11 @@ ftext: $(OBJS)
 	$(CC) $(WFLAGS) -o ftext $(OBJS) $(LIBS)
 
 $(OBJS): $(CFILES)
-	$(CC) $(WFLAGS) -c $(CFILES)
+ifeq ($(DEBUG),1)
+	$(CC) $(WFLAGS) -DDEBUG -Og -g -c $(CFILES)
+else
+	$(CC) $(WFLAGS) -O2 -c $(CFILES)
+endif
 
 clean:
 	rm *.o
