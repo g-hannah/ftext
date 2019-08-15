@@ -584,7 +584,7 @@ main(int argc, char *argv[])
 		goto fail;
 
 	/*
-	 * Remove 0x0d's, replace "-\n" with 0x20
+	 * Remove 0x0d's, remove "-\n"
 	 */
 	__normalise_file(&file);
 
@@ -636,6 +636,7 @@ main(int argc, char *argv[])
 	exit(EXIT_SUCCESS);
 
 	fail:
+	unmap_file(&file);
 	exit(EXIT_FAILURE);
 }
 
