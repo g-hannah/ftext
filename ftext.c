@@ -31,7 +31,7 @@
  * New method passes a mapped_file_t to each function. Any modification
  * of the mapped data is carried out with the help of functions like
  * posix_fallocate(), mremap(), memcpy(), memmove(), memset(), etc. So we
- * are always working on the same mapped file. Hopefully, this is, on
+ * are always working on the same virtual memory area. Hopefully, this is, on
  * the whole, less expensive than the old method, despite the mremap().
  * But given that most of the mremap() usage is in order to add a space
  * character (so extending the map by a single byte), I imagine this
