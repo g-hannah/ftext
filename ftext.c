@@ -26,17 +26,9 @@
  * a brand new file, wrote to it while carrying out its purpose, unmapped
  * the old file, and then unlinked. This seems like an overly expensive
  * method of formatting a .txt file. There's also the fact that some may
- * prefer that their files maintain an original creation timestamp.
- *
- * New method passes a mapped_file_t to each function. Any modification
- * of the mapped data is carried out with the help of functions like
- * posix_fallocate(), mremap(), memcpy(), memmove(), memset(), etc. So we
- * are always working on the same virtual memory area. Hopefully, this is, on
- * the whole, less expensive than the old method, despite the mremap().
- * But given that most of the mremap() usage is in order to add a space
- * character (so extending the map by a single byte), I imagine this
- * usually would not require a copying of the map to another location.
- *
+ * prefer that their files maintain an original creation timestamp. Now
+ * we do everything on the one virtual memory area and therefore keep the
+ * original file intact.
  */
 
 #define PROGRESS_COLOUR			"\e[48;5;2m\e[38;5;16m"
