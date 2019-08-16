@@ -164,36 +164,32 @@ __attribute__((__noreturn__)) usage(int exit_status)
 {
 	fprintf(stdout,
 
-		"change_line_length [OPTIONS] </path/to/file>\r\n"
-		"\r\n"
-		" -L	Specify  the  length of line (this also left-aligns the text  by  default)\r\n"
-		" -j	Justify the text (cannot be used with -r, -c or -u\r\n"
-		" -u	Unjustify the text (cannot be used with -j)\r\n"
-		" -r	Right-align  the  text (must also use -L to specify desired  line  length)\r\n"
-		" -c	Centre-align  the  text (must also use -L to specify desired line  length)\r\n"
-		" -D	Writes  a  log  to  \"debug.log\" in the  current  working  directory.  This\r\n"
-		"	option  has the potential to slow down the formatting of the document,  as\r\n"
-		"	the log is opened O_FSYNC to try and ensure that as much debug information\r\n"
-		"	is  written  to  the  file  as possible in the event  of  a  fatal  error.\r\n"
-		" -h	Display this information menu\r\n"
-		"\r\n"
-		"\r\n"
-		"Examples:\r\n"
-		"\r\n"
-		"change_line_length -L 72 -j /home/Documents/My_Document.txt\r\n"
-		"	changes  maximum  line  length of \"My_Document.txt\" to 72  characters  and\r\n"
-		"	justifies the text\r\n"
-		"\r\n"
-		"change_line_length -L 55 -r /home/Documents/My_Document.txt\r\n"
-		"	changes  maximum  line  length of \"My_Document.txt\" to 55  characters  and\r\n"
-		"	right-aligns the text\r\n"
-		"\r\n"
-		"To  left-align  a text document, use -L <line length> only, as changing the length\r\n"
-		"of the lines left-aligns the text by default.\r\n"
-		"\r\n"
-		"change_line_length -u /home/Documents/My_Document.txt\r\n"
-		"	Unjustifies  \"My_Document.txt\",  which will, by default,  be  left-aligned.\r\n"
-		"\r\n");
+		"change_line_length [OPTIONS] </path/to/file>\n"
+		"\n"
+		" -L	Specify  the  length of line (this also left-aligns the text  by  default)\n"
+		" -j	Justify the text (cannot be used with -r, -c or -u\n"
+		" -u	Unjustify the text (cannot be used with -j)\n"
+		" -r	Right-align  the  text (must also use -L to specify desired  line  length)\n"
+		" -c	Centre-align  the  text (must also use -L to specify desired line  length)\n"
+		" -h	Display this information menu\n"
+		"\n"
+		"\n"
+		"Examples:\n"
+		"\n"
+		"change_line_length -L 72 -j /home/Documents/My_Document.txt\n"
+		"	changes  maximum  line  length of \"My_Document.txt\" to 72  characters  and\n"
+		"	justifies the text\n"
+		"\n"
+		"change_line_length -L 55 -r /home/Documents/My_Document.txt\n"
+		"	changes  maximum  line  length of \"My_Document.txt\" to 55  characters  and\n"
+		"	right-aligns the text\n"
+		"\n"
+		"To  left-align  a text document, use -L <line length> only, as changing the length\n"
+		"of the lines left-aligns the text by default.\n"
+		"\n"
+		"change_line_length -u /home/Documents/My_Document.txt\n"
+		"	Unjustifies  \"My_Document.txt\",  which will, by default,  be  left-aligned.\n"
+		"\n");
 
 	exit(exit_status);
 }
@@ -1562,10 +1558,13 @@ main(int argc, char *argv[])
 	//pthread_attr_setdetachstate(&tATTR, PTHREAD_CREATE_DETACHED);
 
 	opterr = 0;
-	while ((c = getopt(argc, argv, "L:lrcjuDh")) != -1)
+	while ((c = getopt(argc, argv, "L:lrcjuh")) != -1)
 	{
 		switch(c)
 		{
+			case(0x68):
+			usage(EXIT_SUCCESS);
+			break;
 			case(0x6c):
 			set_flag(LALIGN);
 			break;
@@ -1585,16 +1584,12 @@ main(int argc, char *argv[])
 			case(0x75):
 			set_flag(UNJUSTIFY);
 			break;
-			case(0x68):
-			usage(EXIT_SUCCESS);
-			break;
 			case(0x3f):
 			fprintf(stderr, "main: invalid option ('%c')\n", c);
 			exit(EXIT_FAILURE);
 			break;
 			default:
-			fprintf(stderr, "main: invalid option ('%c')\n", c);
-			exit(EXIT_FAILURE);
+			usage(EXIT_FAILURE);
 		}
 	}
 
