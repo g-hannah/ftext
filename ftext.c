@@ -316,26 +316,153 @@ __remove_cr(mapped_file_t *f)
 	return;
 }
 
+/**
+ * Remove whitespace at the start and end of a line
+ * (not including new lines! -- 0x20 / 0x09).
+ */
+static void
+__remove_extra_whitespace(mapped_file_t *f)
+{
+	char	*p = (char *)f->startp;
+	char	*startp = (char *)f->startp;
+	char	*endp = (char *)f->endp;
+	char	*save_p = NULL;
+	size_t	range;
+
+	while (p < endp)
+	{
+		save_p = p;
+
+		if (*p == 0x20 || *p == 0x09)
+		{
+			while (*p == 0x20 || *p == 0x09)
+				++p;
+
+			range = (p - save_p);
+
+			if (range)
+			{
+				__collapse_file(f, (off_t)(save_p - startp), range);
+				endp -= range;
+				p = save_p;
+				range = 0;
+			}
+		}
+
+		p = memchr(save_p, 0x0a, (endp - save_p));
+
+		if (!p)
+		{
+			p = endp - 1;
+			if (*p == 0x20 || *p == 0x09)
+			{
+				save_p = endp;
+				while (*p == 0x20 || *p == 0x09)
+					--p;
+
+				++p;
+
+				range = (save_p - p);
+
+				if (range)
+				{
+					__collapse_file(f, (off_t)(p - startp), range);
+					endp -= range;
+					range = 0;
+				}
+			}
+
+			break;
+		}
+
+		save_p = p;
+		--p;
+
+		if (*p == 0x20 || *p == 0x09)
+		{
+			while (*p == 0x20 || *p == 0x09)
+				--p;
+
+			++p;
+
+			range = (save_p - p);
+
+			if (range)
+			{
+				__collapse_file(f, (off_t)(p - startp), range);
+				endp -= range;
+				range = 0;
+				++p;
+			}
+		}
+
+		if (*save_p == 0x0a)
+			p = save_p + 1;
+	}
+
+	return;
+}
+
+static void
+__unjustify_text(mapped_file_t *f)
+{
+	char	*p = (char *)f->startp;
+	char	*startp = (char *)f->startp;
+	char	*endp = (char *)f->endp;
+	char	*save_p = NULL;
+	size_t	range;
+
+	while (p < endp)
+	{
+		save_p = p;
+
+		p = memchr(save_p, 0x20, (endp - save_p));
+
+		if (!p)
+			break;
+
+		++p;
+		save_p = p;
+
+		while (*p == 0x20)
+			++p;
+
+		range = (p - save_p);
+
+		if (range)
+		{
+			__collapse_file(f, (off_t)(save_p - startp), range);
+			endp -= range;
+			p = save_p;
+			range = 0;
+		}
+	}
+
+	return;
+}
+
 static void
 __normalise_file(mapped_file_t *f)
 {
 	char	*p = (char *)f->startp;
 	char	*startp = (char *)f->startp;
-	char	*endp = (char *)f->endp;
-	char	*prev = NULL;
+	char	*endp = NULL;
+	char	*save_p = NULL;
 
 	__remove_cr(f);
+	__remove_extra_whitespace(f);
+	__unjustify_text(f);
 
+	endp = (char *)f->endp;
+	
 	/*
-	 * Might have some lines where the end of a line
-	 * breaks a word: e.g. "... forg-"
-	 *                     "otten..."
+	 * Finish off by removing any -\n sequencies.
 	 */
 	while (p < endp)
 	{
-		prev = p;
+		save_p = p;
 
-		p = memchr(prev, 0x2d, (endp - prev));
+		p = memchr(save_p, 0x2d, (endp - save_p));
 
 		if (!p)
 			break;
@@ -344,6 +471,12 @@ __normalise_file(mapped_file_t *f)
 		{
 			__collapse_file(f, (off_t)(p - startp), (size_t)2);
 			endp -= 2;
+
+			while (*p != 0x20 && p > startp)
+				--p;
+
+			if (*p == 0x20)
+				*p++ = 0x0a;
 		}
 		else
 		{
@@ -684,75 +817,13 @@ change_line_length(mapped_file_t *file)
 	assert(file);
 
 	char	*p = (char *)file->startp;
-	char	*save_p = (char *)file->startp;
 	char	*startp = (char *)file->startp;
 	char	*endp = (char *)file->endp;
-
-	/*
-	 * Pointers to the current line
-	 * we are dealing with.
-	 */
 	char	*line_start = NULL;
 	char	*line_end = NULL;
-	size_t	range;
 
 	reset_global();
 	global_data.total_lines = __do_line_count(file);
-
-	/*
-	 * Left-align the text first.
-	 */
-
-	while (p < endp)
-	{
-		if (*p == 0x20 || *p == 0x09)
-		{
-			save_p = p;
-			while ((*p == 0x20 || *p == 0x09) && p < endp)
-				++p;
-
-			range = (p - save_p);
-
-			if (range)
-			{
-				__collapse_file(file, (off_t)(save_p - startp), range);
-				p = save_p;
-				endp -= range;
-				range = 0;
-			}
-		}
-
-		while (*p != 0x0a && p < endp)
-		{
-			if (*p == 0x20)
-			{
-				++p;
-
-				save_p = p;
-				while (*p == 0x20 && p < endp)
-					++p;
-
-				range = (p - save_p);
-
-				if (range)
-				{
-					__collapse_file(file, (off_t)(save_p - startp), range);
-					p = save_p;
-					endp -= range;
-					range = 0;
-				}
-
-				continue;
-			}
-
-			++p;
-		}
-
-		while (*p == 0x0a && p < endp)
-			++p;
-	}
-
-	reset_global();
 
 	p = line_start = startp;
 
@@ -765,14 +836,10 @@ change_line_length(mapped_file_t *file)
 	while (p < endp)
 	{
 		__begin_next_line:
-
 		line_end = (p + MAX_LENGTH);
 
-		if (line_end >= endp)
-		{
-			while (line_end > endp)
-				--line_end;
-		}
+		if (line_end > endp)
+			line_end = endp;
 
 		line_start = p;
 
@@ -784,11 +851,9 @@ change_line_length(mapped_file_t *file)
 			if (unlikely(line_end == line_start))
 			{
 				line_end = (line_start + MAX_LENGTH);
-				if (line_end >= endp)
-				{
-					while (line_end > endp)	
-						--line_end;
-				}
+
+				if (line_end > endp)
+					line_end = endp;
 			}
 		}
 
@@ -829,16 +894,7 @@ change_line_length(mapped_file_t *file)
 			}
 		}
 
-		if (p >= endp)
-		{
-			/*
-			 * If the file didn't end with 0x0a, then we will have
-			 * counted (#lines - 1) in __do_line_count(), so don't
-			 * bother incrementing GLOBAL_DATA.DONE_LINES here.
-			 */
-			break;
-		}
-		else
+		if (p < endp)
 		{
 			if (likely(*p == 0x20))
 			{
@@ -908,7 +964,6 @@ change_line_length(mapped_file_t *file)
 		line_end = line_start = p;
 	}
 
-	pthread_join(TID_SP, NULL);
 	return 0;
 
 	fail:
@@ -925,13 +980,15 @@ justify_text(mapped_file_t *file)
 	char	*endp = (char *)file->endp;
 	char	*line_start = NULL;
 	char	*line_end = NULL;
+	char	*left = NULL;
+	char	*right = NULL;
 	char	*save_p = NULL;
 	int		char_cnt = 0;
 	int		delta;
 	int		holes;
 	int		quotient;
 	int		remainder;
-	size_t	range;
+	int		threshold;
 
 	reset_global();
 	global_data.total_lines = __do_line_count(file);
@@ -942,86 +999,40 @@ justify_text(mapped_file_t *file)
 	 * determine the longest line in the file, and
 	 * then justify the text accordingly.
 	 */
-#ifdef DEBUG
-	printf("before: MAX_LENGTH=%d\n", MAX_LENGTH);
-#endif
 	if (!test_flag(LENGTH))
-		MAX_LENGTH = __do_line_count(file);
+		MAX_LENGTH = __get_length_longest_line(file);
 
-#ifdef DEBUG
-	printf("MAX_LENGTH=%d\n", MAX_LENGTH);
-#endif
+	threshold = MAX_LENGTH / 2;
 
 	while (p < endp)
 	{
 		__main_loop_justify_start:
 
-		if (*p == 0x20 || *p == 0x09)
-		{
-			save_p = p;
-			while (*p == 0x20 || *p == 0x09)
-				++p;
-
-			range = (p - save_p);
-
-			if (range)
-			{
-				__collapse_file(file, (off_t)(save_p - startp), range);
-				p = save_p;
-				endp -= range;
-				range = 0;
-			}
-		}
-
 		line_start = p;
 		char_cnt = 0;
 
-		while (*p != 0x0a && p < endp)
-		{
-			if (*p == 0x20)
-			{
-				++p;
-				++char_cnt;
+		p = memchr(line_start, 0x0a, (endp - line_start));
 
-				save_p = p;
-				while (*p == 0x20 && p < endp)
-					++p;
-
-				range = (p - save_p);
-
-				if (range)
-				{
-					__collapse_file(file, (off_t)(save_p - startp), range);
-					endp -= range;
-					p = save_p;
-					range = 0;
-				}
-			}
-			else
-			{
-				++p;
-				++char_cnt;
-			}
-		}
-
-		line_end = p;
-
-		if (line_end == endp && *(line_end-1) == 0x0a)
-			++global_data.done_lines;
+		if (!p)
+			line_end = endp;
 		else
+			line_end = p;
+
+		char_cnt = (int)(line_end - line_start);
+
+		while (*line_end == 0x0a)
 		{
-			while (*line_end == 0x0a)
-			{
-				++line_end;
-				++global_data.done_lines;
-			}
+			++line_end;
+			++global_data.done_lines;
 		}
 
-		if (MAX_LENGTH == char_cnt)
+		/*
+		 * Short lines with more spaces than there are
+		 * letters are not aesthetically pleasing. So
+		 * just leave them alone.
+		 */
+		if (MAX_LENGTH == char_cnt || char_cnt <= threshold)
 		{
-			/*
-			 * Then there's nothing to be done.
-			 */
 			p = line_start = line_end;
 			continue;
 		}
@@ -1037,13 +1048,8 @@ justify_text(mapped_file_t *file)
 			while (p < line_end)
 			{
 				if (*p == 0x20)
-				{
 					++holes;
-					while (*p == 0x20)
-						++p;
 
-					continue;
-				}
 				++p;
 			}
 
@@ -1071,15 +1077,11 @@ justify_text(mapped_file_t *file)
 			 *
 			 * We need to add DELTA spaces to the line to justify it. With the number
 			 * of holes in the current line known, we need to go over the line
-			 * DELTA / HOLES times, adding an additional space between each word
+			 * QUOTIENT times, adding an additional space between each word
 			 * in the line. If (DELTA % HOLES), then must also spread that number of
 			 * additional spaces across the current line.
 			 */
 
-
-			/*
-			 * Extend vma by DELTA bytes to allow for the added spaces.
-			 */
 			if (!__extend_file_and_map(file, (off_t)delta))
 				goto fail;
 
@@ -1087,12 +1089,11 @@ justify_text(mapped_file_t *file)
 
 			/*
 			 * Loop until we have passed over the line QUOTIENT times,
-			 * adding one additional space to each word separation,
-			 * thus spreading out (DELTA - REMAINDER) spaces.
+			 * adding one additional space between each word.
 			 */
 			while (quotient)
 			{
-				if (!p || p == line_end)
+				if (p == line_end)
 				{
 					p = line_start;
 					--quotient;
@@ -1103,14 +1104,17 @@ justify_text(mapped_file_t *file)
 				p = memchr(save_p, 0x20, (line_end - save_p));
 
 				if (!p)
+				{
+					p = line_end;
 					continue;
+				}
 
 				__shift_file_data(file, (off_t)(p - startp), (size_t)1);
 				++line_end;
 
 				*p++ = 0x20;
 
-				while (*p == 0x20 && p < line_end)
+				while (*p == 0x20)
 					++p;
 			}
 
@@ -1122,46 +1126,80 @@ justify_text(mapped_file_t *file)
 			int	_switch = 0;
 			if (remainder)
 			{
-				p = line_start;
+				p = left = line_start;
+				right = (line_end - 1);
 
-				while (remainder--)
+				while (remainder > 0)
 				{
-					if (*p == 0x20)
+					if (!_switch)
 					{
-						if (!__extend_file_and_map(file, (off_t)1))
-							goto fail;
+						p = memchr(left, 0x20, (right - left));
 
-						++endp;
+						if (!p)
+						{
+							left = line_start;
+							right = (line_end - 1);
+
+							_switch = 1;
+							continue;
+						}
 
 						__shift_file_data(file, (off_t)(p - startp), (size_t)1);
 						++line_end;
+						++right;
 
 						*p++ = 0x20;
+						--remainder;
 
-						if (!_switch)
-						{
-							p = (line_end - 1);
-							_switch = 1;
-						}
-						else
-						{
-							p = line_start;
-							_switch = 0;
-						}
+						_switch = 1;
+
+						left = p;
+
+						while (*left == 0x20)
+							++left;
+
 					}
+					else
+					{
+						p = right;
 
-					!_switch ? ++p : --p;
+						while (*p != 0x20 && p > left)
+							--p;
+
+						if (p == left)
+						{
+							right = (line_end - 1);
+							left = line_start;
+
+							_switch = 0;
+							continue;
+						}
+
+						__shift_file_data(file, (off_t)(p - startp), (size_t)1);
+						++line_end;
+						++right;
+
+						*p-- = 0x20;
+						--remainder;
+
+						right = p;
+
+						while (*right == 0x20)
+							--right;
+
+						_switch = 0;
+
+					}
 				}
-			}
+			} // if (remainder)
 
 			p = line_start = line_end;
 
-		} // else (MAX_COUNT != char_cnt)
+		} // else (MAX_COUNT != char_cnt && char_cnt > third_max)
 	} // while (p < endp)
 
 
 	++global_data.done_lines;
-	pthread_join(TID_SP, NULL);
 	return 0;
 
 	fail:
@@ -1174,60 +1212,11 @@ unjustify_text(mapped_file_t *file)
 {
 	assert(file);
 
-	char	*p = (char *)file->startp;
-	char	*startp = (char *)file->startp;
-	char	*endp = (char *)file->endp;
-	char	*save_p = NULL;
-	size_t range;
-
+	/*
+	 * __unjustify_text() is called in __normalise_file()
+	 */
 	reset_global();
-	global_data.total_lines = __do_line_count(file);
-
-	while (p < endp)
-	{
-		save_p = p;
-		while ((*p == 0x20 || *p == 0x09) && p < endp)
-			++p;
-
-		range = (p - save_p);
-
-		if (range)
-		{
-			__collapse_file(file, (off_t)(save_p - startp), range);
-			endp -= range;
-			p = save_p;
-			range = 0;
-		}
-
-		while (*p != 0x0a && p < endp)
-		{
-			if (*p == 0x20)
-			{
-				++p;
-				save_p = p;
-				while (*p == 0x20)
-					++p;
-
-				range = (p - save_p);
-
-				if (range)
-				{
-					__collapse_file(file, (off_t)(save_p - startp), range);
-					endp -= range;
-					p = save_p;
-					range = 0;
-				}
-			}
-
-			++p;
-		}
-
-		while (*p == 0x0a && p < endp)
-		{
-			++p;
-			++global_data.done_lines;
-		}
-	}
+	global_data.done_lines = __do_line_count(file);
 
 	return 0;
 }
@@ -1237,110 +1226,8 @@ left_align_text(mapped_file_t *file)
 {
 	assert(file);
 
-	char		*p = (char *)file->startp;
-	char		*startp = (char *)file->startp;
-	char		*endp = (char *)file->endp;
-	char		*save_p = NULL;
-	char		*line_start = NULL;
-	char		*line_end = NULL;
-	size_t	range;
-
 	reset_global();
-	global_data.total_lines = __do_line_count(file);
-
-	while (p < endp)
-	{
-		while (*p == 0x0a)
-		{
-			++p;
-			++global_data.done_lines;
-		}
-
-		line_start = p;
-		while ((*p == 0x20 || *p == 0x09) && p < endp)
-			++p;
-
-		range = (p - line_start);
-
-		if (range)
-		{
-			__collapse_file(file, (off_t)(line_start - startp), range);
-			endp -= range;
-			p = line_start;
-		}
-
-		if (p == endp)
-		{
-			line_end = p;
-			p = line_start;
-
-			while (p < line_end)
-			{
-				if (*p == 0x20)
-				{
-					++p;
-					save_p = p;
-					while (*p == 0x20)
-						++p;
-
-					range = (p - save_p);
-
-					if (range)
-					{
-						__collapse_file(file, (off_t)(save_p - startp), range);
-						endp -= range;
-						p = save_p;
-						range = 0;
-					}
-				}
-
-				++p;
-			}
-
-			++global_data.done_lines;
-			break;
-		}
-
-		while (*p != 0x0a && p < endp)
-		{
-			if (*p == 0x20)
-			{
-				++p;
-
-				save_p = p;
-				while (*p == 0x20)
-					++p;
-
-				range = (p - save_p);
-
-				if (range)
-				{
-					__collapse_file(file, (off_t)(save_p - startp), range);
-					endp -= range;
-					p = save_p;
-					range = 0;
-				}
-			}
-
-			++p;
-		}
-
-		if (p == endp)
-		{
-			++global_data.done_lines;
-			break;
-		}
-
-
-		line_end = p;
-		while (*line_end == 0x0a)
-		{
-			++line_end;
-			++global_data.done_lines;
-		}
-
-		line_start = p = line_end;
-	}
+	global_data.done_lines = __do_line_count(file);
 
 	return 0;
 }
@@ -1353,10 +1240,8 @@ right_align_text(mapped_file_t *file)
 	char		*p = (char *)file->startp;
 	char		*startp = (char *)file->startp;
 	char		*endp = (char *)file->endp;
-	char		*save_p = NULL;
 	char		*line_start = NULL;
 	char		*line_end = NULL;
-	size_t	range;
 	int			delta;
 	int			char_cnt = 0;
 
@@ -1368,106 +1253,37 @@ right_align_text(mapped_file_t *file)
 		
 	while (p < endp)
 	{
-		while (*p == 0x0a)
-		{
-			++p;
-			++global_data.done_lines;
-		}
-
-		save_p = p;
-		while (*p == 0x20 || *p == 0x09)
-			++p;
-
-		range = (p - save_p);
-
-		if (range)
-		{
-			__collapse_file(file, (off_t)(save_p - startp), range);
-			endp -= range;
-			p = save_p;
-			range = 0;
-		}
-
 		line_start = p;
 		char_cnt = 0;
 
-		while (*p != 0x0a && p < endp)
-		{
-			if (*p == 0x20)
-			{
-				++p;
-				++char_cnt;
+		p = memchr(line_start, 0x0a, (endp - line_start));
 
-				save_p = p;
-				while (*p == 0x20)
-					++p;
+		if (!p)
+			line_end = endp;
+		else
+			line_end = p;
 
-				range = (p - save_p);
-
-				if (range)
-				{
-					__collapse_file(file, (off_t)(save_p - startp), range);
-					endp -= range;
-					p = save_p;
-					range = 0;
-				}
-			}
-			else
-			{
-				++char_cnt;
-				++p;
-			}
-		}
-
-		line_end = p;
-
-		while (*line_end == 0x0a)
-		{
-			++line_end;
-			++global_data.done_lines;
-		}
-
-		line_end = p;
-
-		--p;
-		while (*p == 0x20 || *p == 0x09)
-			--p;
-
-		++p;
-
-		range = (line_end - p);
-
-		if (range)
-		{
-			__collapse_file(file, (off_t)(p - startp), range);
-			endp -= range;
-			char_cnt -= (int)range;
-			range = 0;
-		}
-
-		/*
-		 * Already incremented GLOBAL_DATA.DONE_LINES
-		 */
-		while (*line_end == 0x0a)
-			++line_end;
-
-		if (MAX_LENGTH == char_cnt)
-		{
-			p = line_start = line_end;
-			continue;
-		}
+		char_cnt = (int)(line_end - line_start);
 
 		delta = (MAX_LENGTH - char_cnt);
 
 		if (!__extend_file_and_map(file, (size_t)delta))
 			goto fail;
 
+		endp += delta;
+
 		__shift_file_data(file, (off_t)(line_start - startp), (off_t)delta);
+		line_end += delta;
 
-		p = line_start;
+		p = (line_start + delta);
 
-		while (delta--)
-			*p++ = 0x20;
+		memset(line_start, 0x20, (p - line_start));
+
+		while (*line_end == 0x0a)
+		{
+			++line_end;
+			++global_data.done_lines;
+		}
 
 		p = line_start = line_end;
 	}
@@ -1479,7 +1295,6 @@ right_align_text(mapped_file_t *file)
 	return -1;
 }
 
-// __HERE
 ssize_t
 centre_align_text(mapped_file_t *file)
 {
@@ -1490,11 +1305,9 @@ centre_align_text(mapped_file_t *file)
 	char	*endp = (char *)file->endp;
 	char	*line_start = NULL;
 	char	*line_end = NULL;
-	char	*save_p = NULL;
 	int		char_cnt;
 	int		delta;
 	int		half_delta;
-	size_t	range;
 
 	reset_global();
 	global_data.total_lines = __do_line_count(file);
@@ -1504,54 +1317,17 @@ centre_align_text(mapped_file_t *file)
 
 	while (p < endp)
 	{
-		if (*p == 0x20 || *p == 0x09)
-		{
-			save_p = p;
-			while (*p == 0x20 || *p == 0x09)
-				++p;
-
-			range = (p - save_p);
-
-			if (range)
-			{
-				__collapse_file(file, (off_t)(save_p - startp), range);
-				endp -= range;
-				p = save_p;
-				range = 0;
-			}
-		}
-
 		line_start = p;
 		char_cnt = 0;
 
-		while (*p != 0x0a && p < endp)
-		{
-			if (*p == 0x20)
-			{
-				++p;
-				++char_cnt;
+		p = memchr(line_start, 0x0a, (endp - line_start));
 
-				save_p = p;
-				while (*p == 0x20)
-					++p;
+		if (!p)
+			line_end = endp;
+		else
+			line_end = p;
 
-				range = (p - save_p);
-
-				if (range)
-				{
-					__collapse_file(file, (off_t)(save_p - startp), range);
-					endp -= range;
-					p = save_p;
-					range = 0;
-				}
-			}
-			else
-			{
-				++char_cnt;
-				++p;
-			}
-		}
-
+		char_cnt = (int)(line_end - line_start);
 		delta = (MAX_LENGTH - char_cnt);
 
 		if (!__extend_file_and_map(file, (size_t)delta))
@@ -1559,36 +1335,26 @@ centre_align_text(mapped_file_t *file)
 
 		endp += delta;
 
-		line_end = p;
 		p = line_start;
 
 		half_delta = ((delta / 2) + (delta % 2));
 
 		__shift_file_data(file, (off_t)(p - startp), (size_t)half_delta);
+
 		line_end += half_delta;
+		p = (line_start + half_delta);
 
-		while (half_delta--)
-			*p++ = 0x20;
-
-		p = (line_end - 1);
-		while (*p == 0x20 || *p == 0x09)
-			--p;
-
-		++p;
-
-		range = (line_end - p);
-		half_delta = (delta - half_delta);
-
-		if (range)
-			half_delta -= (int)range;
+		memset(line_start, 0x20, (p - line_start));
 
 		p = line_end;
 
+		half_delta = (delta - half_delta);
+
 		__shift_file_data(file, (off_t)(p - startp), (off_t)half_delta);
+
 		line_end += half_delta;
 
-		while (half_delta--)
-			*p++ = 0x20;
+		memset(p, 0x20, (line_end - p));
 
 		while (*line_end == 0x0a && line_end < endp)
 		{
