@@ -454,24 +454,9 @@ show_progress(void *arg)
 		left(to_print+3);
 
 		if (current_progress >= 100)
-		{
-			goto __complete;
-#if 0
-			while (to_print)
-			{
-				fprintf(stderr, "%s%c%s", PROGRESS_COLOUR, 0x23, END_COL);
-				--to_print;
-				right(to_print);
-				fprintf(stderr, "%s%3u%%%s", DISPLAY_COLOUR, current_progress, END_COL);
-				left(to_print+3);
-			}
-#endif
-
 			break;
-		}
 	}
 
-	__complete:
 	fprintf(stderr, "%s\n", END_COL);
 	pthread_exit((void *)0);
 }
