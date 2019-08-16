@@ -31,24 +31,19 @@
  * original file intact.
  */
 
-#define PROGRESS_COLOUR			"\e[48;5;2m\e[38;5;16m"
-#define DISPLAY_COLOUR			"\e[48;5;255m\e[38;5;208m"
-#define FILE_STATS_COLOUR		"\e[48;5;240m\e[38;5;208m"
 
-#define reset_global()					\
-{																\
-	global_data.total_lines = 0;	\
-	global_data.done_lines = 0;		\
-}
-
-#define clear_struct(s) memset((s), 0, sizeof(*(s)))
+/*
+ * Must use \x1b instead of \e as the latter does not
+ * work on OS X and perhaps on other systems too.
+ */
+#define PROGRESS_COLOUR			"\x1b[48;5;2m\x1b[38;5;16m"
+#define DISPLAY_COLOUR			"\x1b[48;5;255m\x1b[38;5;208m"
+#define FILE_STATS_COLOUR		"\x1b[48;5;240m\x1b[38;5;208m"
+#define END_COL							"\x1b[m"
 
 #ifndef PATH_MAX
 # define PATH_MAX 1024
 #endif
-
-#define likely(x) __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
 
 static int MAX_LENGTH = 0;
 
@@ -69,6 +64,414 @@ typedef struct global_data_t
 	int		total_lines;
 	int		done_lines;
 } global_data_t;
+
+/*
+ * Volatile, otherwise the compiler
+ * will optimise it away.
+ */
+static volatile global_data_t	global_data;
+static mapped_file_t	file;
+static struct winsize			WINSIZE;
+static int		POSITION;
+static uint32_t	user_options;
+
+#define test_flag(f) (user_options & (f))
+#define set_flag(f) (user_options |= (f))
+#define unset_flag(f) (user_options &= ~(f))
+
+#define LENGTH		0x1u
+#define UNJUSTIFY 0x2u
+#define JUSTIFY		0x4u
+#define LALIGN		0x8u
+#define RALIGN		0x10u
+#define CALIGN		0x20u
+
+#define ALIGNMENT_MASK	0x3eu
+
+#define test_user_options()																\
+do {																											\
+	if (test_flag(UNJUSTIFY) && test_flag(JUSTIFY))					\
+	{																												\
+		fprintf(stderr, "main: -j and -u are mutually exclusive\n");\
+		goto fail;																						\
+	}																												\
+	if (test_flag(JUSTIFY)																	\
+			&& (test_flag(LALIGN)																\
+			|| test_flag(RALIGN)																\
+			|| test_flag(CALIGN)))															\
+	{																												\
+		fprintf(stderr, "main: can only specify one alignment type\n");\
+		goto fail;																						\
+	}																												\
+	if ((test_flag(RALIGN)																	\
+			&& (test_flag(CALIGN)																\
+			|| test_flag(LALIGN)))															\
+			|| (test_flag(CALIGN)																\
+			&& (test_flag(RALIGN)																\
+			|| test_flag(LALIGN))))															\
+	{																												\
+		fprintf(stderr, "main: can only specify one alignment type\n");\
+		goto fail;																						\
+	}																												\
+	if (test_flag(LENGTH) && test_flag(UNJUSTIFY))					\
+		unset_flag(UNJUSTIFY);																\
+} while (0)
+
+		/* Thread-related variables */
+//static pthread_attr_t	tATTR;
+static pthread_t			TID_SP;
+#define STR_PROGRESS_LENGTH	 		"[ Changing line length ]"
+#define STR_PROGRESS_JUSTIFY		"[   Justifying lines   ]"
+#define STR_PROGRESS_UNJUSTIFY	"[  Unjustifying lines  ]"
+#define STR_PROGRESS_LALIGN			"[  Left aligning lines ]"
+#define STR_PROGRESS_RALIGN			"[ Right aligning lines ]"
+#define STR_PROGRESS_CALIGN			"[    Centering lines   ]"
+
+#define reset_global()					\
+{																\
+	global_data.total_lines = 0;	\
+	global_data.done_lines = 0;		\
+}
+
+#define clear_struct(s) memset((void *)(s), 0, sizeof(*(s)))
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+
+/**
+ * When we execute __extend_file_and_map(), the VMA could
+ * be copied to a new area. So the current local pointers
+ * would have to be updated.
+ */
+#define check_pointers()																\
+do {																										\
+	if ((void *)startp != file->startp)										\
+	{																											\
+		printf("startp=%p ; file->startp=%p\n",							\
+			startp, file->startp);														\
+		char *old_startp = startp;													\
+		startp = (char *)file->startp;											\
+		endp = (char *)file->endp;													\
+		line_start = (startp + (line_start - old_startp));	\
+		line_end = (startp + (line_end - old_startp));			\
+		p = (startp + (p - old_startp));										\
+	}																											\
+	else																									\
+	{																											\
+		endp = (char *)file->endp;													\
+	}																											\
+} while (0)
+
+static void
+__attribute__((__noreturn__)) usage(int exit_status)
+{
+	fprintf(stdout,
+
+		"change_line_length [OPTIONS] </path/to/file>\r\n"
+		"\r\n"
+		" -L	Specify  the  length of line (this also left-aligns the text  by  default)\r\n"
+		" -j	Justify the text (cannot be used with -r, -c or -u\r\n"
+		" -u	Unjustify the text (cannot be used with -j)\r\n"
+		" -r	Right-align  the  text (must also use -L to specify desired  line  length)\r\n"
+		" -c	Centre-align  the  text (must also use -L to specify desired line  length)\r\n"
+		" -D	Writes  a  log  to  \"debug.log\" in the  current  working  directory.  This\r\n"
+		"	option  has the potential to slow down the formatting of the document,  as\r\n"
+		"	the log is opened O_FSYNC to try and ensure that as much debug information\r\n"
+		"	is  written  to  the  file  as possible in the event  of  a  fatal  error.\r\n"
+		" -h	Display this information menu\r\n"
+		"\r\n"
+		"\r\n"
+		"Examples:\r\n"
+		"\r\n"
+		"change_line_length -L 72 -j /home/Documents/My_Document.txt\r\n"
+		"	changes  maximum  line  length of \"My_Document.txt\" to 72  characters  and\r\n"
+		"	justifies the text\r\n"
+		"\r\n"
+		"change_line_length -L 55 -r /home/Documents/My_Document.txt\r\n"
+		"	changes  maximum  line  length of \"My_Document.txt\" to 55  characters  and\r\n"
+		"	right-aligns the text\r\n"
+		"\r\n"
+		"To  left-align  a text document, use -L <line length> only, as changing the length\r\n"
+		"of the lines left-aligns the text by default.\r\n"
+		"\r\n"
+		"change_line_length -u /home/Documents/My_Document.txt\r\n"
+		"	Unjustifies  \"My_Document.txt\",  which will, by default,  be  left-aligned.\r\n"
+		"\r\n");
+
+	exit(exit_status);
+}
+
+static void
+deleteline(void)
+{
+	int		i;
+
+	putchar(0x0d);
+	for (i = 0; i < WINSIZE.ws_col; ++i)
+		putchar(0x20);
+	putchar(0x0d);
+}
+
+static void
+clear(void)
+{
+	int		i;
+
+	putchar(0x0d);
+	for (i = 0; i < WINSIZE.ws_row; ++i)
+		printf("\e[A");
+
+	for (i = 0; i < WINSIZE.ws_row; ++i)
+	{
+		deleteline();
+		if (i != (WINSIZE.ws_row-1))
+			putchar(0x0a);
+	}
+	putchar(0x0d);
+}
+
+static void
+up(int UP)
+{
+	int		i;
+
+	for (i = 0; i < UP; ++i)
+		printf("\e[A");
+}
+
+static void
+down(int DOWN)
+{
+	int		i;
+
+	for (i = 0; i < DOWN; ++i)
+		printf("\e[B");
+}
+
+static void
+left(int LEFT)
+{
+	int		i;
+
+	for (i = 0; i < LEFT; ++i)
+		printf("\e[D");
+}
+
+static void
+right(int RIGHT)
+{
+	int		i;
+
+	for (i = 0; i < RIGHT; ++i)
+		printf("\e[C");
+}
+
+static void
+fill_line(char *colour)
+{
+	int		i;
+
+	putchar(0x0d);
+	printf("%s", colour);
+	for (i = 0; i < (WINSIZE.ws_col-1); ++i)
+		putchar(0x20);
+	putchar(0x20);
+	putchar(0x0d);
+	printf("\e[m");
+}
+
+static void
+fill(void)
+{
+	int		i, j;
+
+	up(WINSIZE.ws_row-1);
+	for (i = 0; i < WINSIZE.ws_row; ++i)
+	{
+		for (j = 0; j < WINSIZE.ws_col; ++j)
+			putchar(0x20);
+
+		if (i != (WINSIZE.ws_row-1))
+			printf("\r\n");
+	}
+}
+
+/**
+ * Display file file permissions and
+ * file creation time.
+ */
+static void
+print_fileinfo(char *filename)
+{
+	struct stat		statb;
+	char			buffer[512];
+	struct tm		*TIME = NULL;
+	mode_t			mode;
+
+	clear_struct(&statb);
+	lstat(filename, &statb);
+	fill_line(FILE_STATS_COLOUR);
+	printf("%s", FILE_STATS_COLOUR);
+	printf("%22s %s\r\n", "FILENAME", filename);
+	--POSITION;
+	fill_line(FILE_STATS_COLOUR);
+	printf("%s", FILE_STATS_COLOUR);
+	TIME = gmtime(&statb.st_ctime);
+	strftime(buffer, 40, "%A %d %B %Y at %T %Z", TIME);
+	printf("%22s %s\r\n", "CREATED", buffer);
+	--POSITION;
+	fill_line(FILE_STATS_COLOUR);
+	printf("%s", FILE_STATS_COLOUR);
+	printf("%22s ", "PERMISSIONS");
+	mode = statb.st_mode;
+	printf("-");
+
+	if (S_IRUSR & mode)
+		printf("r");
+	else
+		printf("-");
+
+	if (S_IWUSR & mode)
+		printf("w");
+	else
+		printf("-");
+
+	if (S_IXUSR & mode && !(S_ISUID & mode))
+		printf("x");
+	else if (!(S_IXUSR & mode) && S_ISUID & mode)
+		printf("S");
+	else if (S_IXUSR & mode && S_ISUID & mode)
+		printf("s");
+	else
+		printf("-");
+
+	if (S_IRGRP & mode)
+		printf("r");
+	else
+		printf("-");
+
+	if (S_IWGRP & mode)
+		printf("w");
+	else
+		printf("-");
+
+	if (S_IXGRP & mode && !(S_ISGID & mode))
+		printf("x");
+	else if (S_IXGRP & mode && S_ISGID & mode)
+		printf("s");
+	else if (!(S_IXGRP & mode) && S_ISGID & mode)
+		printf("S");
+	else
+		printf("-");
+
+	if (S_IROTH & mode)
+		printf("r");
+	else
+		printf("-");
+
+	if (S_IWOTH & mode)
+		printf("w");
+	else
+		printf("-");
+
+	if (S_IXOTH & mode)
+		printf("x");
+	else
+		printf("-");
+
+	putchar(0x0a);
+
+	--POSITION;
+	fill_line(FILE_STATS_COLOUR);
+	printf("%s", FILE_STATS_COLOUR);
+	printf("%22s %lu bytes\n", "SIZE", statb.st_size);
+	--POSITION;
+
+	printf("%s", END_COL);
+
+	return;
+}
+
+/**
+ * Displays progress bars of the current formatting operation.
+ * @arg - the string identifying the current operation.
+ */
+static void *
+show_progress(void *arg)
+{
+	size_t		len;
+	size_t		to_print;
+	double		float_current_progress;
+	double		period;
+	double		min;
+	double		delta_ceil;
+	double		delta_floor;
+	unsigned	current_progress;
+
+	len = strlen((char *)arg);
+	to_print = (WINSIZE.ws_col-len-4);
+
+	/*
+	 * If 100 blocks make up the 100% bar, single progress
+	 * block is worth 1% of the lines in the file. If 182
+	 * blocks, single progress block is worth 0.5495% of the
+	 * lines in the file. If 50 blocks, single progress block
+	 * is worth 2% of the lines in the file.
+	 */
+
+	period = ((double)100 / (double)to_print);
+	min = period;
+
+	fprintf(stderr, "%s%s%s", DISPLAY_COLOUR, (char *)arg, END_COL);
+
+	for (;;)
+	{
+		while(1)
+		{
+			float_current_progress = ((double)global_data.done_lines / (double)global_data.total_lines) * 100;
+			if (float_current_progress >= min)
+				break;
+		}
+
+		/*
+		 * Are we nearer the ceiling or the floor?
+		 */
+		delta_ceil = (double)ceil(float_current_progress) - float_current_progress;
+		delta_floor = float_current_progress - (double)floor(float_current_progress);
+
+		if (delta_ceil <= delta_floor)
+			current_progress = (unsigned)ceil(float_current_progress);
+		else
+			current_progress = (unsigned)floor(float_current_progress);
+
+		while (min < float_current_progress)
+		{
+			fprintf(stderr, "%s%c%s", PROGRESS_COLOUR, 0x23, END_COL);
+			min += period;
+			--to_print;
+		}
+
+		right(to_print);
+		fprintf(stderr, "%s%3u%%%s", DISPLAY_COLOUR, current_progress, END_COL);
+		left(to_print+3);
+
+		if (current_progress >= 100)
+		{
+			while (to_print)
+			{
+				fprintf(stderr, "%s%c%s", PROGRESS_COLOUR, 0x23, END_COL);
+				--to_print;
+				right(to_print);
+				fprintf(stderr, "%s%3u%%%s", DISPLAY_COLOUR, current_progress, END_COL);
+				left(to_print+3);
+			}
+
+			break;
+		}
+	}
+
+	fprintf(stderr, "%s\n", END_COL);
+	pthread_exit((void *)0);
+}
 
 /*
  * Remove a byte range from the file and vma by taking the data
@@ -477,99 +880,7 @@ __normalise_file(mapped_file_t *f)
 	}
 }
 
-int	check_file(char *) __nonnull((1)) __wur;
-void usage(int) __attribute__((__noreturn__));
-
-/* Text formatting functions */
-ssize_t change_length(mapped_file_t *) __nonnull((1)) __wur;
-ssize_t	justify_text(mapped_file_t *) __nonnull((1)) __wur;
-ssize_t unjustify_text(mapped_file_t *) __nonnull((1)) __wur;
-ssize_t left_align_text(mapped_file_t *) __nonnull((1)) __wur;
-ssize_t right_align_text(mapped_file_t *) __nonnull((1)) __wur;
-ssize_t centre_align_text(mapped_file_t *) __nonnull((1)) __wur;
-ssize_t	change_line_length(mapped_file_t *) __nonnull((1)) __wur;
-
-// screen-drawing functions
-void clear(void);
-void deleteline(void);
-void h_centre(int, int, int);
-void v_centre(int, int, int);
-void up(int);
-void down(int);
-void left(int);
-void right(int);
-void fill_line(char *) __nonnull((1));
-void fill(void);
-
-// data-related functions
-int do_line_count(char *) __nonnull((1));
-void print_fileinfo(char *) __nonnull((1));
-
-/* Thread that displays progress of each formatting operation */
-void *show_progress(void *);
-
-
-static global_data_t	global_data;
-static mapped_file_t	file;
-
-static struct winsize			WINSIZE;
-static int		POSITION;
-
-// global flags
-static uint32_t	user_options;
-#define test_flag(f) (user_options & (f))
-#define set_flag(f) (user_options |= (f))
-#define unset_flag(f) (user_options &= ~(f))
-
-#define LENGTH		0x1u
-#define UNJUSTIFY 0x2u
-#define JUSTIFY		0x4u
-#define LALIGN		0x8u
-#define RALIGN		0x10u
-#define CALIGN		0x20u
-
-#define ALIGNMENT_MASK	0x3eu
-
-#define test_user_options()																\
-do {																											\
-	if (test_flag(UNJUSTIFY) && test_flag(JUSTIFY))					\
-	{																												\
-		fprintf(stderr, "main: -j and -u are mutually exclusive\n");\
-		goto fail;																						\
-	}																												\
-	if (test_flag(JUSTIFY)																	\
-			&& (test_flag(LALIGN)																\
-			|| test_flag(RALIGN)																\
-			|| test_flag(CALIGN)))															\
-	{																												\
-		fprintf(stderr, "main: can only specify one alignment type\n");\
-		goto fail;																						\
-	}																												\
-	if ((test_flag(RALIGN)																	\
-			&& (test_flag(CALIGN)																\
-			|| test_flag(LALIGN)))															\
-			|| (test_flag(CALIGN)																\
-			&& (test_flag(RALIGN)																\
-			|| test_flag(LALIGN))))															\
-	{																												\
-		fprintf(stderr, "main: can only specify one alignment type\n");\
-		goto fail;																						\
-	}																												\
-	if (test_flag(LENGTH) && test_flag(UNJUSTIFY))					\
-		unset_flag(UNJUSTIFY);																\
-} while (0)
-
-		/* Thread-related variables */
-//static pthread_attr_t	tATTR;
-static pthread_t			TID_SP;
-#define STR_PROGRESS_LENGTH	 		"[ Changing line length ]"
-#define STR_PROGRESS_JUSTIFY		"[   Justifying lines   ]"
-#define STR_PROGRESS_UNJUSTIFY	"[  Unjustifying lines  ]"
-#define STR_PROGRESS_LALIGN			"[  Left aligning lines ]"
-#define STR_PROGRESS_RALIGN			"[ Right aligning lines ]"
-#define STR_PROGRESS_CALIGN			"[    Centering lines   ]"
-
-/*
+/**
  * Map file into virtual memory.
  */
 static mapped_file_t *
@@ -611,7 +922,7 @@ map_file(mapped_file_t *f)
 	return f;
 }
 
-/*
+/**
  * Unmap file from virtual memory.
  */
 static void
@@ -619,9 +930,7 @@ unmap_file(mapped_file_t *f)
 {
 	assert(f);
 
-	void		*startp = f->startp;
-
-	munmap(startp, f->map_size);
+	munmap(f->startp, f->map_size);
 
 	if (f->fd > 2)
 		close(f->fd);
@@ -631,141 +940,7 @@ unmap_file(mapped_file_t *f)
 	return;
 }
 
-int
-main(int argc, char *argv[])
-{
-	char		c;
-
-	/*
-	 * Minimum number of args is 3, e.g. 'ftext -j file.txt`
-	 */
-	if (argc < 3)
-		usage(EXIT_FAILURE);
-
-	/*
-	 * Must be done here and not in some constructor function
-	 * because the terminal window dimensions are not known
-	 * before main() is called.
-	 */
-	clear_struct(&WINSIZE);
-	ioctl(STDOUT_FILENO, TIOCGWINSZ, &WINSIZE);
-	setvbuf(stdout, NULL, _IONBF, 0);
-
-	clear_struct(&global_data);
-	//pthread_attr_setdetachstate(&tATTR, PTHREAD_CREATE_DETACHED);
-
-	opterr = 0;
-	while ((c = getopt(argc, argv, "L:lrcjuDh")) != -1)
-	{
-		switch(c)
-		{
-			case(0x6c):
-			set_flag(LALIGN);
-			break;
-			case(0x72):
-			set_flag(RALIGN);
-			break;
-			case(0x63):
-			set_flag(CALIGN);
-			break;
-			case(0x4c):
-			MAX_LENGTH = atoi(optarg);
-			set_flag(LENGTH);
-			break;
-			case(0x6a):
-			set_flag(JUSTIFY);
-			break;
-			case(0x75):
-			set_flag(UNJUSTIFY);
-			break;
-			case(0x68):
-			usage(EXIT_SUCCESS);
-			break;
-			case(0x3f):
-			fprintf(stderr, "main: invalid option ('%c')\n", c);
-			exit(EXIT_FAILURE);
-			break;
-			default:
-			fprintf(stderr, "main: invalid option ('%c')\n", c);
-			exit(EXIT_FAILURE);
-		}
-	}
-
-	test_user_options();
-
-	if (check_file(argv[optind]) == -1)
-		goto fail;
-
-	if (strlen(argv[optind]) >= PATH_MAX)
-	{
-		fprintf(stderr, "main: path length exceeds PATH_MAX\n");
-		goto fail;
-	}
-
-	clear_struct(&file);
-	strcpy(file.filename, argv[optind]);
-
-	if (!(map_file(&file)))
-		goto fail;
-
-	/*
-	 * Remove 0x0d's, remove "-\n"
-	 */
-	__normalise_file(&file);
-
-	clear();
-	fill();
-	up(6);
-	POSITION = 6;
-	print_fileinfo(argv[optind]);
-	down(POSITION-2);
-
-	if (test_flag(LENGTH))
-	{
-		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_LENGTH);
-		if (change_line_length(&file) == -1)
-			goto fail;
-	}
-
-	uint32_t		alignment = user_options & ALIGNMENT_MASK;
-	switch(alignment)
-	{
-		case JUSTIFY:
-			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_JUSTIFY);
-			if (justify_text(&file) == -1)
-				goto fail;
-			break;
-		case UNJUSTIFY:
-			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_UNJUSTIFY);
-			if (unjustify_text(&file) == -1)
-				goto fail;
-			break;
-		case LALIGN:
-			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_LALIGN);
-			if (left_align_text(&file) == -1)
-				goto fail;
-			break;
-		case RALIGN:
-			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_RALIGN);
-			if (right_align_text(&file) == -1)
-				goto fail;
-			break;
-		case CALIGN:
-			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_CALIGN);
-			if (centre_align_text(&file) == -1)
-				goto fail;
-			break;
-	}
-
-	unmap_file(&file);
-	exit(EXIT_SUCCESS);
-
-	fail:
-	unmap_file(&file);
-	exit(EXIT_FAILURE);
-}
-
-int
+static int
 check_file(char *filename)
 {
 	struct stat	statb;
@@ -789,7 +964,11 @@ check_file(char *filename)
 	}
 
 	clear_struct(&statb);
-	lstat(filename, &statb);
+	if (lstat(filename, &statb) < 0)
+	{
+		fprintf(stderr, "check_file: lstat error (%s)\n", strerror(errno));
+		goto fail;
+	}
 
 	if (!S_ISREG(statb.st_mode))
 	{
@@ -803,7 +982,7 @@ check_file(char *filename)
 	return -1;
 }
 
-ssize_t
+static int
 change_line_length(mapped_file_t *file)
 {
 	assert(file);
@@ -895,12 +1074,11 @@ change_line_length(mapped_file_t *file)
 			else
 			if (*p == 0x0a)
 			{
-				/*
-				 * There can only be one, otherwise we would have
-				 * skipped them and restarted the loop above.
-				 */
-				++p;
-				++global_data.done_lines;
+				while (*p == 0x0a)
+				{
+					++p;
+					++global_data.done_lines;
+				}
 			}
 			else
 			if (*p != 0x20)
@@ -938,7 +1116,7 @@ change_line_length(mapped_file_t *file)
 				if (!__extend_file_and_map(file, shift))
 					goto fail;
 
-				endp += shift;
+				check_pointers();
 
 				__shift_file_data(file, (off_t)(p - startp), shift);
 
@@ -956,13 +1134,14 @@ change_line_length(mapped_file_t *file)
 		line_end = line_start = p;
 	}
 
+	pthread_join(TID_SP, NULL);
 	return 0;
 
 	fail:
 	return -1;
 }
 
-ssize_t
+static int
 justify_text(mapped_file_t *file)
 {
 	assert(file);
@@ -1077,7 +1256,7 @@ justify_text(mapped_file_t *file)
 			if (!__extend_file_and_map(file, (off_t)delta))
 				goto fail;
 
-			endp += delta;
+			check_pointers();
 
 			/*
 			 * Loop until we have passed over the line QUOTIENT times,
@@ -1192,6 +1371,8 @@ justify_text(mapped_file_t *file)
 
 
 	++global_data.done_lines;
+
+	pthread_join(TID_SP, NULL);
 	return 0;
 
 	fail:
@@ -1199,7 +1380,7 @@ justify_text(mapped_file_t *file)
 	return -1;
 }
 
-ssize_t
+static int
 unjustify_text(mapped_file_t *file)
 {
 	assert(file);
@@ -1213,7 +1394,7 @@ unjustify_text(mapped_file_t *file)
 	return 0;
 }
 
-ssize_t
+static int
 left_align_text(mapped_file_t *file)
 {
 	assert(file);
@@ -1224,7 +1405,7 @@ left_align_text(mapped_file_t *file)
 	return 0;
 }
 
-ssize_t
+static int
 right_align_text(mapped_file_t *file)
 {
 	assert(file);
@@ -1262,7 +1443,7 @@ right_align_text(mapped_file_t *file)
 		if (!__extend_file_and_map(file, (size_t)delta))
 			goto fail;
 
-		endp += delta;
+		check_pointers();
 
 		__shift_file_data(file, (off_t)(line_start - startp), (off_t)delta);
 		line_end += delta;
@@ -1287,7 +1468,7 @@ right_align_text(mapped_file_t *file)
 	return -1;
 }
 
-ssize_t
+static int
 centre_align_text(mapped_file_t *file)
 {
 	assert(file);
@@ -1321,15 +1502,17 @@ centre_align_text(mapped_file_t *file)
 
 		char_cnt = (int)(line_end - line_start);
 		delta = (MAX_LENGTH - char_cnt);
+		half_delta = ((delta / 2) + (delta % 2));
 
-		if (!__extend_file_and_map(file, (size_t)delta))
+		if (!__extend_file_and_map(file, (size_t)half_delta))
 			goto fail;
 
-		endp += delta;
+		check_pointers();
 
 		p = line_start;
 
-		half_delta = ((delta / 2) + (delta % 2));
+#ifdef DEBUG
+#endif
 
 		__shift_file_data(file, (off_t)(p - startp), (size_t)half_delta);
 
@@ -1338,15 +1521,8 @@ centre_align_text(mapped_file_t *file)
 
 		memset(line_start, 0x20, (p - line_start));
 
-		p = line_end;
-
-		half_delta = (delta - half_delta);
-
-		__shift_file_data(file, (off_t)(p - startp), (off_t)half_delta);
-
-		line_end += half_delta;
-
-		memset(p, 0x20, (line_end - p));
+#ifdef DEBUG
+#endif
 
 		while (*line_end == 0x0a && line_end < endp)
 		{
@@ -1364,335 +1540,137 @@ centre_align_text(mapped_file_t *file)
 	return -1;
 }
 
-// screen-drawing functions
-void
-h_centre(int dir, int left, int right)
+int
+main(int argc, char *argv[])
 {
-	int		i;
-
-	if (dir == 0)
-	{
-		for (i = 0; i < ((WINSIZE.ws_col/2)-left+right); ++i)
-			printf("\e[C");
-	}
-	else
-	if (dir == 1)
-	{
-		for (i = 0; i < ((WINSIZE.ws_col/2)-left+right); ++i)
-			printf("\e[D");
-	}
-}
-
-void
-v_centre(int dir, int up, int down)
-{
-	int		i;
-
-	if (dir == 0)
-	{
-		for (i = 0; i < ((WINSIZE.ws_row/2)+up-down); ++i)
-			printf("\e[B");
-	}
-	else
-	if (dir == 1)
-	{
-		for (i = 0; i < ((WINSIZE.ws_row/2)+up-down); ++i)
-			printf("\e[A");
-	}
-}
-
-void
-deleteline(void)
-{
-	int		i;
-
-	putchar(0x0d);
-	for (i = 0; i < WINSIZE.ws_col; ++i)
-		putchar(0x20);
-	putchar(0x0d);
-}
-
-void
-clear(void)
-{
-	int		i;
-
-	putchar(0x0d);
-	for (i = 0; i < WINSIZE.ws_row; ++i)
-		printf("\e[A");
-
-	for (i = 0; i < WINSIZE.ws_row; ++i)
-	{
-		deleteline();
-		if (i != (WINSIZE.ws_row-1))
-			putchar(0x0a);
-	}
-	putchar(0x0d);
-}
-
-void
-up(int UP)
-{
-	int		i;
-
-	for (i = 0; i < UP; ++i)
-		printf("\e[A");
-}
-
-void
-down(int DOWN)
-{
-	int		i;
-
-	for (i = 0; i < DOWN; ++i)
-		printf("\e[B");
-}
-
-void
-left(int LEFT)
-{
-	int		i;
-
-	for (i = 0; i < LEFT; ++i)
-		printf("\e[D");
-}
-
-void
-right(int RIGHT)
-{
-	int		i;
-
-	for (i = 0; i < RIGHT; ++i)
-		printf("\e[C");
-}
-
-// __FILL_LINE__
-void
-fill_line(char *colour)
-{
-	int		i;
-
-	putchar(0x0d);
-	printf("%s", colour);
-	for (i = 0; i < (WINSIZE.ws_col-1); ++i)
-		putchar(0x20);
-	putchar(0x20);
-	putchar(0x0d);
-	printf("\e[m");
-}
-
-void
-fill(void)
-{
-	int		i, j;
-
-	up(WINSIZE.ws_row-1);
-	for (i = 0; i < WINSIZE.ws_row; ++i)
-	{
-		for (j = 0; j < WINSIZE.ws_col; ++j)
-			putchar(0x20);
-
-		if (i != (WINSIZE.ws_row-1))
-			printf("\r\n");
-	}
-}
-
-/* thread-related functions */
-void *
-show_progress(void *arg)
-{
-	size_t		len, to_print;
-	double		float_current_progress, float_current_progress_save, period, min;
-	unsigned	current_progress, current_progress_save;
-
-	len = strlen((char *)arg);
-	current_progress = current_progress_save = 0;
-	float_current_progress = float_current_progress_save = 0.0;
-	to_print = (WINSIZE.ws_col-len-4);
+	char		c;
 
 	/*
-	 * For example, if there are 200 blocks to print that
-	 * make up the 100% bar, then each block is worth
-	 * 0.5%. So check progress as a double and only print
-	 * a new block when gaining another 0.5% increase;
-	 *   If we only need 50 blocks for the bar, then
-	 * each block is worth 2%, etc.
+	 * Minimum number of args is 3, e.g. 'ftext -j file.txt`
 	 */
-	period = ((double)100/(double)to_print);
-	min = period;
+	if (argc < 3)
+		usage(EXIT_FAILURE);
 
-	printf("%s%s\e[m", DISPLAY_COLOUR, (char *)arg);
-	for (;;)
+	/*
+	 * Must be done here and not in some constructor function
+	 * because the terminal window dimensions are not known
+	 * before main() is called.
+	 */
+	clear_struct(&WINSIZE);
+	ioctl(STDOUT_FILENO, TIOCGWINSZ, &WINSIZE);
+	setvbuf(stdout, NULL, _IONBF, 0);
+
+	clear_struct(&global_data);
+	//pthread_attr_setdetachstate(&tATTR, PTHREAD_CREATE_DETACHED);
+
+	opterr = 0;
+	while ((c = getopt(argc, argv, "L:lrcjuDh")) != -1)
 	{
-		while ((float_current_progress = ((double)global_data.done_lines / (double)global_data.total_lines)) == float_current_progress_save);
-		float_current_progress_save = float_current_progress;
-		/*
-		 * Are we nearer the ceiling or the floor?
-		 */
-		float_current_progress *= 100;
-		double delta_ceil = (double)ceil(float_current_progress) - float_current_progress;
-		double delta_floor  = float_current_progress - (double)floor(float_current_progress);
-
-		if (delta_ceil < delta_floor
-			|| (delta_ceil == delta_floor))
-			current_progress = (unsigned)ceil(float_current_progress);
-		else
-			current_progress = (unsigned)floor(float_current_progress);
-
-		if (current_progress == 100)
+		switch(c)
 		{
-			while (to_print > 0)
-			{
-				printf("%s%c\e[m", PROGRESS_COLOUR, 0x23);
-				--to_print;
-			}
-			right(to_print);
-			printf("%s%3d%%\e[m\r\n", DISPLAY_COLOUR, (unsigned)current_progress);
-			goto __show_progress_end;
+			case(0x6c):
+			set_flag(LALIGN);
+			break;
+			case(0x72):
+			set_flag(RALIGN);
+			break;
+			case(0x63):
+			set_flag(CALIGN);
+			break;
+			case(0x4c):
+			MAX_LENGTH = atoi(optarg);
+			set_flag(LENGTH);
+			break;
+			case(0x6a):
+			set_flag(JUSTIFY);
+			break;
+			case(0x75):
+			set_flag(UNJUSTIFY);
+			break;
+			case(0x68):
+			usage(EXIT_SUCCESS);
+			break;
+			case(0x3f):
+			fprintf(stderr, "main: invalid option ('%c')\n", c);
+			exit(EXIT_FAILURE);
+			break;
+			default:
+			fprintf(stderr, "main: invalid option ('%c')\n", c);
+			exit(EXIT_FAILURE);
 		}
-
-		if ((float_current_progress) >= min)
-		{
-			printf("%s%c\e[m", PROGRESS_COLOUR, 0x23);
-			/*
-			 * Now increment MIN until it exceeds the current
-			 * progress, and that will be our next target
-		   * of progress before we print a block.
-			 */
-			while (min < float_current_progress)
-				min += period;
-			--to_print;
-		}
-
-		if (current_progress_save != current_progress)
-		{
-			right(to_print);
-			printf("%s%3u%%\e[m", DISPLAY_COLOUR, (unsigned)current_progress);
-			left(to_print+3);
-			current_progress_save = current_progress;
-		}
-
-		float_current_progress = float_current_progress_save = 0.0;
 	}
 
-	__show_progress_end:
-	printf("\e[m");
-	pthread_exit((void *)0);
-}
+	test_user_options();
 
-void
-print_fileinfo(char *filename)
-{
-	struct stat		statb;
-	char			buffer[512];
-	struct tm		*TIME = NULL;
-	mode_t			mode;
+	if (check_file(argv[optind]) == -1)
+		goto fail;
 
-	clear_struct(&statb);
-	lstat(filename, &statb);
-	fill_line(FILE_STATS_COLOUR);
-	printf("%s", FILE_STATS_COLOUR);
-	printf("%22s %s\r\n", "FILENAME", filename);
-	--POSITION;
-	fill_line(FILE_STATS_COLOUR);
-	printf("%s", FILE_STATS_COLOUR);
-	TIME = gmtime(&statb.st_mtime);
-	strftime(buffer, 40, "%A %d %B %Y at %T %Z", TIME);
-	printf("%22s %s\r\n", "MODIFIED", buffer);
-	--POSITION;
-	fill_line(FILE_STATS_COLOUR);
-	printf("%s", FILE_STATS_COLOUR);
-	printf("%22s ", "PERMISSIONS");
-	mode = statb.st_mode;
-	printf("-");
-	if (S_IRUSR & mode)
-		printf("r");
-	else
-		printf("-");
-	if (S_IWUSR & mode)
-		printf("w");
-	else
-		printf("-");
-	if (S_IXUSR & mode && !(S_ISUID & mode))
-		printf("x");
-	else if (!(S_IXUSR & mode) && S_ISUID & mode)
-		printf("S");
-	else if (S_IXUSR & mode && S_ISUID & mode)
-		printf("s");
-	else
-		printf("-");
-	if (S_IRGRP & mode)
-		printf("r");
-	else
-		printf("-");
-	if (S_IWGRP & mode)
-		printf("w");
-	else
-		printf("-");
-	if (S_IXGRP & mode && !(S_ISGID & mode))
-		printf("x");
-	else if (S_IXGRP & mode && S_ISGID & mode)
-		printf("s");
-	else if (!(S_IXGRP & mode) && S_ISGID & mode)
-		printf("S");
-	else
-		printf("-");
-	if (S_IROTH & mode)
-		printf("r");
-	else
-		printf("-");
-	if (S_IWOTH & mode)
-		printf("w");
-	else
-		printf("-");
-	if (S_IXOTH & mode)
-		printf("x");
-	else
-		printf("-");
-	printf("\r\n");
-	--POSITION;
-	fill_line(FILE_STATS_COLOUR);
-	printf("%s", FILE_STATS_COLOUR);
-	printf("%22s %lu bytes\r\n", "SIZE", statb.st_size);
-	--POSITION;
-	printf("\e[m");
-}
+	if (strlen(argv[optind]) >= PATH_MAX)
+	{
+		fprintf(stderr, "main: path length exceeds PATH_MAX\n");
+		goto fail;
+	}
 
-void
-usage(int exit_status)
-{
-	fprintf(stdout,
+	clear_struct(&file);
+	strcpy(file.filename, argv[optind]);
 
-		"change_line_length [OPTIONS] </path/to/file>\r\n"
-		"\r\n"
-		" -L	Specify  the  length of line (this also left-aligns the text  by  default)\r\n"
-		" -j	Justify the text (cannot be used with -r, -c or -u\r\n"
-		" -u	Unjustify the text (cannot be used with -j)\r\n"
-		" -r	Right-align  the  text (must also use -L to specify desired  line  length)\r\n"
-		" -c	Centre-align  the  text (must also use -L to specify desired line  length)\r\n"
-		" -D	Writes  a  log  to  \"debug.log\" in the  current  working  directory.  This\r\n"
-		"	option  has the potential to slow down the formatting of the document,  as\r\n"
-		"	the log is opened O_FSYNC to try and ensure that as much debug information\r\n"
-		"	is  written  to  the  file  as possible in the event  of  a  fatal  error.\r\n"
-		" -h	Display this information menu\r\n"
-		"\r\n"
-		"\r\n"
-		"Examples:\r\n"
-		"\r\n"
-		"change_line_length -L 72 -j /home/Documents/My_Document.txt\r\n"
-		"	changes  maximum  line  length of \"My_Document.txt\" to 72  characters  and\r\n"
-		"	justifies the text\r\n"
-		"\r\n"
-		"change_line_length -L 55 -r /home/Documents/My_Document.txt\r\n"
-		"	changes  maximum  line  length of \"My_Document.txt\" to 55  characters  and\r\n"
-		"	right-aligns the text\r\n"
-		"\r\n"
-		"To  left-align  a text document, use -L <line length> only, as changing the length\r\n"
-		"of the lines left-aligns the text by default.\r\n"
-		"\r\n"
-		"change_line_length -u /home/Documents/My_Document.txt\r\n"
-		"	Unjustifies  \"My_Document.txt\",  which will, by default,  be  left-aligned.\r\n"
-		"\r\n");
+	if (!(map_file(&file)))
+		goto fail;
 
-	exit(exit_status);
+	/*
+	 * Remove 0x0d's, remove "-\n"
+	 */
+	__normalise_file(&file);
+
+	clear();
+	fill();
+	up(6);
+	POSITION = 6;
+	print_fileinfo(argv[optind]);
+	down(POSITION-2);
+
+	if (test_flag(LENGTH))
+	{
+		pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_LENGTH);
+		usleep(10000);
+		if (change_line_length(&file) == -1)
+			goto fail;
+	}
+
+	uint32_t		alignment = user_options & ALIGNMENT_MASK;
+	switch(alignment)
+	{
+		case JUSTIFY:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_JUSTIFY);
+			if (justify_text(&file) == -1)
+				goto fail;
+			break;
+		case UNJUSTIFY:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_UNJUSTIFY);
+			if (unjustify_text(&file) == -1)
+				goto fail;
+			break;
+		case LALIGN:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_LALIGN);
+			if (left_align_text(&file) == -1)
+				goto fail;
+			break;
+		case RALIGN:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_RALIGN);
+			if (right_align_text(&file) == -1)
+				goto fail;
+			break;
+		case CALIGN:
+			pthread_create(&TID_SP, NULL, show_progress, (void *)STR_PROGRESS_CALIGN);
+			if (centre_align_text(&file) == -1)
+				goto fail;
+			break;
+	}
+
+	unmap_file(&file);
+	exit(EXIT_SUCCESS);
+
+	fail:
+	unmap_file(&file);
+	exit(EXIT_FAILURE);
 }
