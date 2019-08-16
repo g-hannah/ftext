@@ -144,21 +144,19 @@ static pthread_t			TID_SP;
  */
 #define check_pointers()																\
 do {																										\
-	if ((void *)startp != file->startp)										\
-	{																											\
-		printf("startp=%p ; file->startp=%p\n",							\
-			startp, file->startp);														\
-		char *old_startp = startp;													\
-		startp = (char *)file->startp;											\
-		endp = (char *)file->endp;													\
-		line_start = (startp + (line_start - old_startp));	\
-		line_end = (startp + (line_end - old_startp));			\
-		p = (startp + (p - old_startp));										\
-	}																											\
-	else																									\
-	{																											\
-		endp = (char *)file->endp;													\
-	}																											\
+	if ((void *)startp != file->startp)			\
+	{							\													\
+		char *old_startp = startp;			\
+		startp = (char *)file->startp;			\
+		endp = (char *)file->endp;			\
+		line_start = (startp + (line_start - old_startp));\
+		line_end = (startp + (line_end - old_startp));	\
+		p = (startp + (p - old_startp));		\
+	}							\
+	else							\
+	{							\
+		endp = (char *)file->endp;			\
+	}							\
 } while (0)
 
 static void
