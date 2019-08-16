@@ -145,7 +145,7 @@ static pthread_t			TID_SP;
 #define check_pointers()																\
 do {																										\
 	if ((void *)startp != file->startp)			\
-	{							\													\
+	{																				\
 		char *old_startp = startp;			\
 		startp = (char *)file->startp;			\
 		endp = (char *)file->endp;			\
@@ -297,7 +297,7 @@ static void
 print_fileinfo(char *filename)
 {
 	struct stat		statb;
-	char			buffer[512];
+	static char			buffer[512];
 	struct tm		*TIME = NULL;
 	mode_t			mode;
 
@@ -305,13 +305,13 @@ print_fileinfo(char *filename)
 	lstat(filename, &statb);
 	fill_line(FILE_STATS_COLOUR);
 	printf("%s", FILE_STATS_COLOUR);
-	printf("%22s %s\r\n", "FILENAME", filename);
+	printf("%22s %s\n", "FILENAME", filename);
 	--POSITION;
 	fill_line(FILE_STATS_COLOUR);
 	printf("%s", FILE_STATS_COLOUR);
 	TIME = gmtime(&statb.st_ctime);
 	strftime(buffer, 40, "%A %d %B %Y at %T %Z", TIME);
-	printf("%22s %s\r\n", "CREATED", buffer);
+	printf("%22s %s\n", "CREATED", buffer);
 	--POSITION;
 	fill_line(FILE_STATS_COLOUR);
 	printf("%s", FILE_STATS_COLOUR);
@@ -377,7 +377,12 @@ print_fileinfo(char *filename)
 	--POSITION;
 	fill_line(FILE_STATS_COLOUR);
 	printf("%s", FILE_STATS_COLOUR);
-	printf("%22s %lu bytes\n", "SIZE", statb.st_size);
+	printf("%22s %lu bytes\n", "FILE SIZE", statb.st_size);
+	--POSITION;
+	fill_line(FILE_STATS_COLOUR);
+	printf("%s", FILE_STATS_COLOUR);
+	int	page_size = sysconf(_SC_PAGESIZE);
+	printf("%22s %lu + %lu bytes (system page size=%d)\n", "TOTAL PAGES", statb.st_size / page_size, statb.st_size % page_size, page_size);
 	--POSITION;
 
 	printf("%s", END_COL);
@@ -450,6 +455,8 @@ show_progress(void *arg)
 
 		if (current_progress >= 100)
 		{
+			goto __complete;
+#if 0
 			while (to_print)
 			{
 				fprintf(stderr, "%s%c%s", PROGRESS_COLOUR, 0x23, END_COL);
@@ -458,11 +465,13 @@ show_progress(void *arg)
 				fprintf(stderr, "%s%3u%%%s", DISPLAY_COLOUR, current_progress, END_COL);
 				left(to_print+3);
 			}
+#endif
 
 			break;
 		}
 	}
 
+	__complete:
 	fprintf(stderr, "%s\n", END_COL);
 	pthread_exit((void *)0);
 }
@@ -1363,9 +1372,6 @@ justify_text(mapped_file_t *file)
 		} // else (MAX_COUNT != char_cnt && char_cnt > third_max)
 	} // while (p < endp)
 
-
-	++global_data.done_lines;
-
 	pthread_join(TID_SP, NULL);
 	return 0;
 
@@ -1385,6 +1391,7 @@ unjustify_text(mapped_file_t *file)
 	reset_global();
 	global_data.done_lines = __do_line_count(file);
 
+	pthread_join(TID_SP, NULL);
 	return 0;
 }
 
@@ -1394,8 +1401,12 @@ left_align_text(mapped_file_t *file)
 	assert(file);
 
 	reset_global();
-	global_data.done_lines = __do_line_count(file);
+	global_data.total_lines = __do_line_count(file);
 
+	while (global_data.done_lines < global_data.total_lines)
+		++global_data.done_lines;
+
+	pthread_join(TID_SP, NULL);
 	return 0;
 }
 
@@ -1455,6 +1466,7 @@ right_align_text(mapped_file_t *file)
 		p = line_start = line_end;
 	}
 
+	pthread_join(TID_SP, NULL);
 	return 0;
 
 	fail:
@@ -1527,6 +1539,7 @@ centre_align_text(mapped_file_t *file)
 		p = line_start = line_end;
 	}
 
+	pthread_join(TID_SP, NULL);
 	return 0;
 
 	fail:
